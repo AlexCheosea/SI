@@ -1,0 +1,59 @@
+/*
+ * File:   init.c
+ * Author: Alex
+ *
+ * Created on June 6, 2026, 4:23 PM
+ */
+#define TMR0_RELOAD_VAL 112 //valoarea pentru intrerupere de 1ms
+#define TMR0_SET        0b10000100
+
+#include <xc.h>
+#include "init.h"
+void system_init(void) { //apeleaza toate functiile de initializare din assembly
+    buzzer_init();
+    hmi_init();
+    spi_init();
+    uart_init();
+    bme280_init();
+    
+    //Timer0 (Baza de timp HMI))
+    OPTION_REG = TMR0_SET;  // Prescaler 1:32 alocat lui Timer0
+    TMR0 = TMR0_RELOAD_VAL; // Valoare pentru generare intrerupere la 1 ms 
+    INTCONbits.T0IE = 1;    // Activează întreruperile Timer0 (pentru HMI)
+    INTCONbits.PEIE = 1;    // Activează întreruperile Periferice (pentru UART)
+    
+    INTCONbits.GIE = 1;     // Activează întreruperile Globale
+    return;
+}
+
+// =============================================================================
+// WRAPPER-UL PRINCIPAL DE ÎNTRERUPERI (ISR)
+// =============================================================================
+
+
+void __interrupt() isr(void){
+    
+    // [SURSA 1]: Întrerupere de la Timer0 (Baza de timp de 1ms)
+    if (T0IE && T0IF) {
+        TMR0 = TMR0_RELOAD_VAL;
+        hmi_update();
+        
+        if(buzzer_ms_ramase > 0){
+            buzzer_ms_ramase--;
+            if(buzzer_ms_ramase == 0){
+                buzzer_off();
+            }
+        }
+        T0IF = 0;
+    }
+    // [SURSA 2]: Întrerupere RX UART (A sosit un octet de la PC/Interfață)
+    if (RCIE && RCIF) {
+        uart_rx_isr();
+    }
+    
+    // [SURSA 3]: Întrerupere TX UART (Bufferul hardware de transmisie este gol)
+    if (TXIE && TXIF) {
+        // NOTĂ: Funcția uart_tx_isr() va scrie următorul octet din buffer în TXREG.;
+        uart_tx_isr();
+    }
+}

@@ -1,0 +1,45 @@
+# Exclude the two older MPLAB X project variants
+/idk_incerc_ceva.X/
+/idk_incerc_ceva_mic.X/
+
+# Exclude ZIP backup archives
+*.zip
+
+# MPLAB X build output and caches
+**/build/
+**/dist/
+**/_build/
+**/.ca/
+**/out/
+
+# Per-user MPLAB X settings
+**/nbproject/private/
+
+# Local editor settings
+**/.vscode/
+
+# Compiled firmware and intermediate files
+*.elf
+*.hex
+*.hxl
+*.map
+*.o
+*.obj
+*.p1
+*.d
+*.i
+*.lst
+*.rlf
+*.sdb
+*.sym
+*.cmf
+*.mum
+
+# MPLAB X trace logs
+**/defmplabxtrace.log
+/16f877a.X/.github/skills/semantic-index/
+/Text scroll.txt
+/linker placement.txt
+/out.txt
+/script.py
+/scroll.txt
