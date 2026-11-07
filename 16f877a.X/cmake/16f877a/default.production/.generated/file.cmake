@@ -20,7 +20,6 @@ foreach(source_file ${16f877a_default_default_XC8_FILE_TYPE_assemblePreprocess})
 endforeach()
 
 set(16f877a_default_default_XC8_FILE_TYPE_compile
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../bme280.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../buzzer.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../hmi.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../init.c"

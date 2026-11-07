@@ -8,7 +8,6 @@
       <itemPath>buzzer.h</itemPath>
       <itemPath>spi.h</itemPath>
       <itemPath>hmi.h</itemPath>
-      <itemPath>bme280.h</itemPath>
       <itemPath>init.h</itemPath>
       <itemPath>main.h</itemPath>
     </logicalFolder>
@@ -46,7 +45,7 @@
         <targetDevice>PIC16F877A</targetDevice>
         <targetHeader></targetHeader>
         <targetPluginBoard></targetPluginBoard>
-        <platformTool>noID</platformTool>
+        <platformTool>PICkit3PlatformTool</platformTool>
         <languageToolchain>XC8</languageToolchain>
         <languageToolchainVersion>4.00</languageToolchainVersion>
         <platform>2</platform>

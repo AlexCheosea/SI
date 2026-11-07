@@ -103,38 +103,21 @@ void hmi_set_bargraph(uint8_t led_count, uint8_t is_red) {
         bar_grn_high = (uint8_t)((mask >> 8) & 0x03); // Izolăm strict cei 2 LSBs
     }
 }
-//extern volatile uint8_t btn_i0event;
-//extern volatile uint8_t btn_i1event;
 unsigned char citeste_tastatura(void){
     unsigned char ev0 = 0;
-    unsigned char ev1 = 0;
     di();
     ev0 = btn_i0event;
-    ev1 = btn_i1event;
     btn_i0event = 0;
-    btn_i1event = 0;
     ei();
     
-    //Mapare primele 8 butoane
-    if(ev0 & 0x01) return '7'; 
-    if(ev0 & 0x02) return '8';
-    if(ev0 & 0x04) return '9';
-    if(ev0 & 0x08) return '/';
+    if(ev0 & 0x01) return '0';
+    if(ev0 & 0x02) return '1';
+    if(ev0 & 0x04) return '2';
+    if(ev0 & 0x08) return '3';
     if(ev0 & 0x10) return '4';
     if(ev0 & 0x20) return '5';
     if(ev0 & 0x40) return '6';
-    if(ev0 & 0x80) return '*';
+    if(ev0 & 0x80) return '7';
     
-    //Mapare ultimele 8 butoane
-    if(ev1 & 0x01) return '1'; 
-    if(ev1 & 0x02) return '2';
-    if(ev1 & 0x04) return '3';
-    if(ev1 & 0x08) return '-';
-    if(ev1 & 0x10) return 'C';
-    if(ev1 & 0x20) return '0';
-    if(ev1 & 0x40) return '#';
-    if(ev1 & 0x80) return '+';
-
     return 0;
 }
-

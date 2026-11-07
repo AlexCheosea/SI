@@ -17,8 +17,6 @@ extern volatile uint8_t bar_red_high;
 extern volatile uint8_t bar_grn_low;
 extern volatile uint8_t bar_grn_high;
 extern volatile uint8_t btn_i0event;
-extern volatile uint8_t btn_i1event;
-extern volatile int8_t  enc_pos;
 extern volatile int8_t  dp_pos;
 // Rutinele native din asamblare
 void hmi_init(void);
@@ -53,7 +51,4 @@ unsigned char citeste_tastatura(void);
 // 0-7 pentru pozitia digit point
 // trebuie scris dupa afisarea unui caracter la acea pozitie
 #define set_dp_pos(pos)         (dp_pos = (pos))
-#define set_encoder_pos(pos)    (enc_pos = (pos))
-#define get_encoder_pos()       (enc_pos)
-
 #endif /* HMI_H */

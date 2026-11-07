@@ -10,10 +10,8 @@ PSECT udata_bank3,global,class=BANK3,space=1,noexec
 
 GLOBAL _bar_red_low, _bar_red_high, _bar_grn_high, _bar_grn_low  
 GLOBAL _dp_pos
-GLOBAL _enc_pos
 GLOBAL _disp_buf
-GLOBAL _btn_i0event, _btn_i1event
-GLOBAL _temp_var_isr ; a se folosi pentru storage temporar in isr
+GLOBAL _btn_i0event
 _seg_index:     DS 1 
 _disp_cnt:      DS 1 
 _bar_red_low:   DS 1 
@@ -21,95 +19,19 @@ _bar_red_high:  DS 1
 _bar_grn_low:   DS 1      
 _bar_grn_high:  DS 1 
 _dp_pos:	    DS 1     ; Locatie digit point
-_enc_pos:        DS 1    ; Valoare cu semn pe 8 biti (-128 la +127)
-_prev_state:     DS 1    
-_curr_state:     DS 1    
-_temp_var_isr:       DS 1
     
 _disp_buf:       DS 8   ; Buffer mutat în Bank 3
 _btn_i0state:    DS 1   
-_btn_i1state:    DS 1   
 _btn_i0prev:     DS 1   
-_btn_i1prev:     DS 1   
 _btn_i0event:    DS 1   
-_btn_i1event:    DS 1   
 
     
-;===============================================================================
-; SECTIUNEA DE COD - ENCODER
-;===============================================================================
-PSECT hmi_code,abs, ovrld, class=CODE, delta=2
-ORG 0x1D00
-encoder_update:
-    BANKSEL PORTA               ; PORTA este în Bank 0
-    MOVF    PORTA, W
-    
-    BANKSEL _curr_state         ; Trecem în Bank 3 pentru variabile
-    ANDLW   0x03
-    MOVWF   BANKMASK(_curr_state)
-    
-    XORWF   BANKMASK(_prev_state), W
-    BTFSC   STATUS, STATUS_Z_POSN
-    RETURN
-    
-    BCF     STATUS, STATUS_C_POSN
-    RLF     BANKMASK(_prev_state), W
-    MOVWF   BANKMASK(_temp_var_isr)
-    BCF     STATUS, STATUS_C_POSN
-    RLF     BANKMASK(_temp_var_isr), W
-    
-    IORWF   BANKMASK(_curr_state), W
-    MOVWF   BANKMASK(_temp_var_isr)
-    
-    MOVLW   HIGH(enc_state_table)
-    MOVWF   PCLATH
-    MOVF    BANKMASK(_temp_var_isr), W
-    PAGESEL enc_state_table
-    CALL    enc_state_table&0x7FF
-    
-    MOVWF   BANKMASK(_temp_var_isr)
-    MOVF    BANKMASK(_temp_var_isr), F                
-    BTFSC   STATUS, STATUS_Z_POSN
-    GOTO    update_end&0x7FF
-    
-    DECF    BANKMASK(_temp_var_isr), W
-    BTFSC   STATUS, STATUS_Z_POSN
-    GOTO    do_inc&0x7FF
-    
-do_dec:
-    DECF    BANKMASK(_enc_pos), F                 
-    GOTO    update_end&0x7FF
-
-do_inc:
-    INCF    BANKMASK(_enc_pos), F                 
-
-update_end:
-    MOVF    BANKMASK(_curr_state), W
-    MOVWF   BANKMASK(_prev_state)
-    RETURN
-
-enc_state_table:
-    ADDWF   PCL, F
-    RETLW   0   ; 00 -> 00
-    RETLW   1   ; 00 -> 01
-    RETLW   2   ; 00 -> 10
-    RETLW   0   ; 00 -> 11
-    RETLW   2   ; 01 -> 00
-    RETLW   0   ; 01 -> 01
-    RETLW   0   ; 01 -> 10
-    RETLW   1   ; 01 -> 11
-    RETLW   1   ; 10 -> 00
-    RETLW   0   ; 10 -> 01
-    RETLW   0   ; 10 -> 10
-    RETLW   2   ; 10 -> 11
-    RETLW   0   ; 11 -> 00
-    RETLW   2   ; 11 -> 01
-    RETLW   1   ; 11 -> 10
-    RETLW   0   ; 11 -> 11
-
 ;===============================================================================
 ; DISPLAY DRIVER CODE
 ;===============================================================================
+PSECT hmi_code,abs, ovrld, class=CODE, delta=2
+ORG 0x1D00
+
 GLOBAL _hmi_init, _hmi_update
 
 
@@ -121,8 +43,8 @@ _hmi_init:
     MOVWF   TRISE               ;PORT E iesire      
     MOVLW   0b00000110          ;Toate porturile digitale      
     MOVWF   ADCON1              ; ADCON1 este tot în Bank 1
-    MOVLW   0b00001111          ;0 iesiri, 1 intrari      
-    IORWF   TRISA, F		;AN0-4 intrari
+    MOVLW   0b00100000          ;RA5 input      
+    IORWF   TRISA, F		;RA5 input
     BCF     TRISC, 0                  
     BCF     TRISC, 1 
     ;BANKSEL CMCON		;tot banc 1
@@ -131,11 +53,8 @@ _hmi_init:
     ; Trecem în Bank 3 pentru inițializarea variabilelor din RAM
     BANKSEL _btn_i0state
     CLRF    BANKMASK(_btn_i0state)
-    CLRF    BANKMASK(_btn_i1state)
     CLRF    BANKMASK(_btn_i0prev)
-    CLRF    BANKMASK(_btn_i1prev)
     CLRF    BANKMASK(_btn_i0event)
-    CLRF    BANKMASK(_btn_i1event)
     MOVLW   9                         
     MOVWF   BANKMASK(_disp_cnt)
     RETURN   
@@ -181,7 +100,7 @@ dp_off:
     CALL    mask_pressed&0x7FF
     
     BANKSEL PORTA               ; Mergem în Bank 0 să citim pinul fizic
-    BTFSS   PORTA, 2                
+    BTFSS   PORTA, 5                
     GOTO    not_pressed_I0&0x7FF
 pressed_I0: 
     BANKSEL _btn_i0state        ; Înapoi în Bank 3 pentru salvare date
@@ -199,29 +118,6 @@ event_I0:
     MOVF    BANKMASK(_btn_i0state), W          
     MOVWF   BANKMASK(_btn_i0prev)
 
-; Test I1   
-    BANKSEL _disp_cnt
-    MOVF    BANKMASK(_disp_cnt), W
-    CALL    mask_pressed&0x7FF
-    
-    BANKSEL PORTA               ; Citim pin hardware (Bank 0)
-    BTFSS   PORTA, 3                   
-    GOTO    not_pressed_I1&0x7FF
-pressed_I1:
-    BANKSEL _btn_i1state        ; Salvăm în Bank 3
-    IORWF   BANKMASK(_btn_i1state), F          
-    GOTO    event_I1&0x7FF
-not_pressed_I1:
-    BANKSEL _btn_i1state        ; Salvăm în Bank 3
-    XORLW   0xFF                    
-    ANDWF   BANKMASK(_btn_i1state), F          
-event_I1:
-    COMF    BANKMASK(_btn_i1prev), W
-    ANDWF   BANKMASK(_btn_i1state), W
-    IORWF   BANKMASK(_btn_i1event), F          
-    MOVF    BANKMASK(_btn_i1state), W          
-    MOVWF   BANKMASK(_btn_i1prev)
-    
     GOTO    display_end&0x7FF
 
 mask_pressed:
@@ -270,8 +166,6 @@ display_bar_green:
     GOTO    display_end&0x7FF
 
 _hmi_update:
-    CALL    encoder_update&0x7FF       
-    
     BANKSEL _disp_cnt        ;Ne asiguram ca suntem in Bank 3   
     MOVF    BANKMASK(_disp_cnt), W
     XORLW   8

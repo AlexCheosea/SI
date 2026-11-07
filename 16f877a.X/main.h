@@ -74,20 +74,14 @@ const char error_seg[][SEG_ROW_LEN] = { "Err menu" };
 
 // Main menu options (Exactly 11 characters so the '>' aligns perfectly to the right wall)
 const char* const menu_uart_txt[] = {
-    "Meteo     >", // Fits perfectly: |1.Meteo     >|
-    "SPI       >", // Fits perfectly: |2.SPI       >|
-    "Setari    >", // Fits perfectly: |3.Setari    >|
+    "SPI       >", // Fits perfectly: |1.SPI       >|
+    "Setari    >", // Fits perfectly: |2.Setari    >|
     "Audio grid",  // 10 chars -> auto-pads 1 space to the right wall
     "UART rxbuf"   // 10 chars -> auto-pads 1 space to the right wall
 };
 
-// Meteo Submenu (Adjusted to fit within the 11-character limit)
-
 // SPI Submenu (Cleaned and adjusted to the 11-character limit)
 const char* const sub_spi_uart_txt[] = {
-    "Temp SPI",    // 8 chars  -> auto-padded dynamically
-    "Pot [V]",  // 10 chars -> shortened "Potentio" to "Potent"
-    "Light lvl", // 11 chars -> shortened "Luminozitate"
     "Motor spd",  // 10 chars -> shortened "viteza" to "vit."
     "Motor dir"   // 10 chars -> auto-padded dynamically
 };
