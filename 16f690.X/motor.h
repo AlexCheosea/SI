@@ -20,10 +20,10 @@
 #define PS_1_2      0x1
 #define PS_1_4      0x2
 #define PS_1_8      0x3
-#define TMR1_PS     PS_1_8 //must match divisor below
-#define TMR1_FREQ   (_XTAL_FREQ/4/8UL)
-#define MIN_SPS 5
-#define MAX_SPS 1000
+#define TMR1_PS     PS_1_2 //must match divisor below
+#define TMR1_FREQ   (_XTAL_FREQ/4/2UL)
+#define MIN_SPS 20
+#define MAX_SPS 3000
 #define MOTOR_SPEED_INCREMENT_DEFAULT 10U
 
 extern volatile uint16_t motor_target_steps_per_second;
@@ -43,8 +43,8 @@ void motor_init(void);
 
 /**
  * @brief Sets the background stepping speed and direction.
- * Automatically clips the speed between 5 and 1000 steps/second.
- * @param steps_per_second Speed (5 to 1000). Values below 5 stop the motor.
+ * Automatically clips the speed between MIN_SPS and MAX_SPS steps/second.
+ * @param steps_per_second Speed (MIN_SPS to MAX_SPS). Values below MIN_SPS stop the motor.
  * @param direction DIR_CW or DIR_CCW
  */
 void motor_set_speed(uint16_t steps_per_second, uint8_t direction);
@@ -54,7 +54,7 @@ void motor_set_speed(uint16_t steps_per_second, uint8_t direction);
  * @param steps_per_second Target speed. Values below 5 stop the motor.
  * @param direction DIR_CW or DIR_CCW
  */
-void motor_set_target_speed(uint16_t steps_per_second, uint8_t direction);
+inline void motor_set_target_speed(uint16_t steps_per_second, uint8_t direction);
 
 /**
  * @brief Background step sequencer. Must be called inside the high-priority 

@@ -102,10 +102,10 @@ void motor_set_speed(uint16_t steps_per_second, uint8_t direction) {
 void motor_ramp_isr_handler(void) {
     PIR1bits.TMR2IF = 0;
 
-    if (++timer2_interrupt_count < 5) {
-        return;
-    }
-    timer2_interrupt_count = 0;
+//    if (++timer2_interrupt_count < 5) {
+//        return;
+//    }
+//    timer2_interrupt_count = 0;
 
     uint16_t target_sps = motor_target_steps_per_second;
     if (target_sps < MIN_SPS) {
@@ -114,7 +114,17 @@ void motor_ramp_isr_handler(void) {
         target_sps = MAX_SPS;
     }
 
-    if (motor_current_sps == target_sps || motor_speed_increment == 0) {
+    if (motor_current_sps > 0 && motor_dir != motor_target_direction) {
+        target_sps = 0;
+    } else if (motor_current_sps == 0 && motor_dir != motor_target_direction) {
+        motor_dir = motor_target_direction;
+    }
+
+    if (motor_current_sps == target_sps) {
+        return;
+    }
+
+    if (motor_speed_increment == 0) {
         return;
     }
 
@@ -131,7 +141,7 @@ void motor_ramp_isr_handler(void) {
             : motor_current_sps - motor_speed_increment;
     }
 
-    motor_set_speed(next_sps, motor_target_direction);
+    motor_set_speed(next_sps, motor_dir);
     // Preserve sub-MIN_SPS ramp progress while the motor output remains stopped.
     motor_current_sps = next_sps;
 }
