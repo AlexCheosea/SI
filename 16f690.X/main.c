@@ -34,10 +34,10 @@ void main(void) {
             di(); //dezactivam intreruperile
             uint16_t speed = spi_motor_speed; //copiem valorile 
             uint8_t dir = spi_motor_dir;
+            spi_motor_updated = 0;
             ei(); //PS. nu puteam dezactiva intreruperile direct pentru
             //motor_set_speed deoarece functia dureaza prea mult
-            motor_set_speed(spi_motor_speed, spi_motor_dir);
-            spi_motor_updated = 0;
+            motor_set_target_speed(speed, dir);
         }
     }
     return;

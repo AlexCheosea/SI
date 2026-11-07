@@ -33,4 +33,6 @@ void __interrupt() isr_handler(){
         spi_isr();
     if(PIR1bits.TMR1IF)
         motor_isr_handler();
+    if(PIR1bits.TMR2IF)
+        motor_ramp_isr_handler();
 }

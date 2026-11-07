@@ -20,6 +20,11 @@ static volatile int8_t step_index = 0;
 __bit motor_dir;
 static volatile uint16_t t1_reload_val = 0;
 static volatile uint8_t motor_running = 0;
+volatile uint16_t motor_target_steps_per_second = 0;
+static volatile uint16_t motor_current_sps = 0;
+static volatile uint8_t motor_target_direction = DIR_CW;
+static uint8_t timer2_interrupt_count = 0;
+volatile uint8_t motor_speed_increment = MOTOR_SPEED_INCREMENT_DEFAULT;
 
 void motor_init(void) {
     TRIS_MOTOR &= 0xC0; // Configure RC0, RC1, RC2, RC3, RC4, RC5 as digital outputs
@@ -32,8 +37,8 @@ void motor_init(void) {
     MOTOR_PORT &= 0xC0; // Ensure motor coils are unpowered on bootup
     
     // --- TIMER1 CONFIGURATION ---
-    T1CONbits.TMR1CS = 0;       // Clock source: Internal instruction clock (Fosc/4 = 1MHz)
-    T1CONbits.T1CKPS = TMR1_PS; // Prescaler 1:4 -> Timer1 Frequency = 250,000 Hz
+    T1CONbits.TMR1CS = 0;       // Clock source: Fosc/4 = 2MHz at 8MHz Fosc
+    T1CONbits.T1CKPS = TMR1_PS; // Prescaler 1:8 -> Timer1 Frequency = 250,000 Hz
     T1CONbits.nT1SYNC = 1;      // Do not synchronize external clock
     
     // --- INTERRUPT CONFIGURATION ---
@@ -41,14 +46,38 @@ void motor_init(void) {
     PIE1bits.TMR1IE = 1;    // Enable Timer1 overflow interrupt
     INTCONbits.PEIE = 1;    // Enable peripheral interrupts
     //INTCONbits.GIE = 1;     // Enable global interrupts
+
+    // Timer2 runs at 10 ms intervals; five interrupts make one 50 ms ramp tick.
+    T2CON = 0;
+    PR2 = 249;
+    TMR2 = 0;
+    T2CONbits.T2CKPS = 0b10; // Prescaler 1:16
+    T2CONbits.TOUTPS = 0b0100; // Postscaler 1:5
+    PIR1bits.TMR2IF = 0;
+    PIE1bits.TMR2IE = 1;
+    T2CONbits.TMR2ON = 1;
     
     T1CONbits.TMR1ON = 1;   // Fire up Timer1
     motor_dir = DIR_CW;
 }
+
+inline void motor_set_target_speed(uint16_t steps_per_second, uint8_t direction) {
+    uint8_t global_interrupts_enabled = INTCONbits.GIE;
+    INTCONbits.GIE = 0;
+
+    motor_target_steps_per_second = steps_per_second;
+    motor_target_direction = direction;
+
+    if (global_interrupts_enabled) {
+        INTCONbits.GIE = 1;
+    }
+}
+
 void motor_set_speed(uint16_t steps_per_second, uint8_t direction) {
-    // Lower threshold forced by the physical bounds of a 16-bit register running at 500kHz
+    // Lower threshold is constrained by Timer1's 16-bit range at 250kHz.
     if (steps_per_second < MIN_SPS) { 
         motor_running = 0;
+        motor_current_sps = 0;
         //MOTOR_PORT &= 0xC0; // De-energize H-bridges to prevent standby heat buildup
         return;
     }
@@ -59,6 +88,7 @@ void motor_set_speed(uint16_t steps_per_second, uint8_t direction) {
     }
     
     motor_dir = direction;
+    motor_current_sps = steps_per_second;
     
     // Mathematical mapping: Timer Ticks = TMR1_FREQ / Steps Per Second
     uint16_t ticks = TMR1_FREQ / steps_per_second;
@@ -67,6 +97,43 @@ void motor_set_speed(uint16_t steps_per_second, uint8_t direction) {
     t1_reload_val = (uint16_t)(65536 - ticks);
     MOTOR_PORT |= 0b00110000; //Set L293D enable lines high
     motor_running = 1;
+}
+
+void motor_ramp_isr_handler(void) {
+    PIR1bits.TMR2IF = 0;
+
+    if (++timer2_interrupt_count < 5) {
+        return;
+    }
+    timer2_interrupt_count = 0;
+
+    uint16_t target_sps = motor_target_steps_per_second;
+    if (target_sps < MIN_SPS) {
+        target_sps = 0;
+    } else if (target_sps > MAX_SPS) {
+        target_sps = MAX_SPS;
+    }
+
+    if (motor_current_sps == target_sps || motor_speed_increment == 0) {
+        return;
+    }
+
+    uint16_t next_sps;
+    if (motor_current_sps < target_sps) {
+        uint16_t difference = target_sps - motor_current_sps;
+        next_sps = difference <= motor_speed_increment
+            ? target_sps
+            : motor_current_sps + motor_speed_increment;
+    } else {
+        uint16_t difference = motor_current_sps - target_sps;
+        next_sps = difference <= motor_speed_increment
+            ? target_sps
+            : motor_current_sps - motor_speed_increment;
+    }
+
+    motor_set_speed(next_sps, motor_target_direction);
+    // Preserve sub-MIN_SPS ramp progress while the motor output remains stopped.
+    motor_current_sps = next_sps;
 }
 
 void motor_isr_handler(void) {

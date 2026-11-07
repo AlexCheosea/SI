@@ -24,6 +24,10 @@
 #define TMR1_FREQ   (_XTAL_FREQ/4/8UL)
 #define MIN_SPS 5
 #define MAX_SPS 1000
+#define MOTOR_SPEED_INCREMENT_DEFAULT 10U
+
+extern volatile uint16_t motor_target_steps_per_second;
+extern volatile uint8_t motor_speed_increment;
 
 // -- Macros
 #define motor_off() (MOTOR_PORT &= 0xC0) //Turn coils off
@@ -33,22 +37,33 @@
 
 /**
  * @brief Configures RC0-RC3 as digital outputs and initializes Timer1 
- * with a static 1:4 prescaler for accurate background stepping.
+ * with a static 1:8 prescaler for accurate background stepping.
  */
 void motor_init(void);
 
 /**
  * @brief Sets the background stepping speed and direction.
- * Automatically clips the speed between 4 and 1000 steps/second.
- * @param steps_per_second Target speed (4 to 1000). Pass 0 to STOP.
+ * Automatically clips the speed between 5 and 1000 steps/second.
+ * @param steps_per_second Speed (5 to 1000). Values below 5 stop the motor.
  * @param direction DIR_CW or DIR_CCW
  */
 void motor_set_speed(uint16_t steps_per_second, uint8_t direction);
+
+/**
+ * @brief Sets the target speed and direction for the 50 ms speed ramp.
+ * @param steps_per_second Target speed. Values below 5 stop the motor.
+ * @param direction DIR_CW or DIR_CCW
+ */
+void motor_set_target_speed(uint16_t steps_per_second, uint8_t direction);
 
 /**
  * @brief Background step sequencer. Must be called inside the high-priority 
  * global __interrupt() ISR block in your main.c file.
  */
 void motor_isr_handler(void);
+/**
+ * @brief Timer2 interrupt handler. Updates the speed ramp every 50 ms.
+ */
+void motor_ramp_isr_handler(void);
 void motor_hold();
 #endif	/* MOTOR_H */
