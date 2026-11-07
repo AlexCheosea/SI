@@ -2,7 +2,6 @@
 #define	INIT_H
 
 #include <stdint.h>
-#include "bme280.h"
 #include "buzzer.h"
 #include "hmi.h"
 #include "spi.h"
@@ -36,7 +35,6 @@ extern void uart_init(void);
 extern void hmi_update(void);
 extern void uart_rx_isr(void);
 extern void uart_tx_isr(void);
-extern uint8_t bme280_init(void);
 /**
  * Configures the microcontrollers peripherals, sets up Timer0 
  * for a 1ms periodic interrupt, and enables global interrupts.

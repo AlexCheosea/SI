@@ -31,7 +31,6 @@
       <itemPath>spi_asm.s</itemPath>
       <itemPath>hmi_asm.s</itemPath>
       <itemPath>hmi.c</itemPath>
-      <itemPath>bme280.c</itemPath>
       <itemPath>init.c</itemPath>
       <itemPath>uart.c</itemPath>
     </logicalFolder>
@@ -47,10 +46,10 @@
         <targetDevice>PIC16F877A</targetDevice>
         <targetHeader></targetHeader>
         <targetPluginBoard></targetPluginBoard>
-        <platformTool>PICkit3PlatformTool</platformTool>
+        <platformTool>noID</platformTool>
         <languageToolchain>XC8</languageToolchain>
         <languageToolchainVersion>4.00</languageToolchainVersion>
-        <platform>3</platform>
+        <platform>2</platform>
       </toolsSet>
       <packs>
         <pack name="PIC16Fxxx_DFP" vendor="Microchip" version="1.7.162"/>
@@ -104,7 +103,7 @@
         <property key="optimization-invariant-enable" value="false"/>
         <property key="optimization-invariant-value" value="16"/>
         <property key="optimization-level" value="-O2"/>
-        <property key="optimization-speed" value="false"/>
+        <property key="optimization-speed" value="true"/>
         <property key="optimization-stable-enable" value="false"/>
         <property key="preprocess-assembler" value="true"/>
         <property key="short-enums" value="true"/>

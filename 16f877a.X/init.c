@@ -14,7 +14,6 @@ void system_init(void) { //apeleaza toate functiile de initializare din assembly
     hmi_init();
     spi_init();
     uart_init();
-    bme280_init();
     
     //Timer0 (Baza de timp HMI))
     OPTION_REG = TMR0_SET;  // Prescaler 1:32 alocat lui Timer0

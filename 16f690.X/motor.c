@@ -13,7 +13,8 @@
 
 // 4-Step Full-Torque Stepper Sequence mapped to Pins 0, 1, 2, 3
 static const uint8_t step_sequence[4] = {0x05, 0x06, 0x0A, 0x09};
-
+//static const uint8_t step_sequence[4] = {0x05, 0x01, 0x03, 0x02}; //4-step full-torque sequence
+//static const uint8_t step_sequence[8] = {0x05, 0x01, 0x03, 0x02, 0x06, 0x04, 0x0C, 0x08}; //8-step half-torque sequence
 // Module-isolated runtime variables
 static volatile int8_t step_index = 0;
 __bit motor_dir;

@@ -6,7 +6,6 @@
 #include <string.h>
 
 #include "init.h"
-#include "bme280.h"
 #include "buzzer.h"
 #include "hmi.h"
 #include "spi.h"
@@ -27,11 +26,9 @@
 #define FLAG_SOUND           0x01   // Masks for the packed bits
 #define FLAG_OCTAVA          0x02
 #define FLAG_DIR             0x04
-//BME280 calibration struct ===================================================
-extern BME280_Calib_t c;
-extern BME280_Raw_t raw;
+
 // =============================================================================
-// STRUCTURE DEFINITIONS FOR THE UNIFIED MENU ENGINE
+// STRUCTURE DEFINITIONS FOR THE MENU
 // =============================================================================
 typedef struct {
     const char* const* rows; // Pointer to an array of string pointers in Flash
@@ -42,8 +39,7 @@ typedef struct {
 // MAIN STATES & SEVEN-SEGMENT MENUS (Left intact for HMI)
 // =============================================================================
 typedef enum {
-    ST_MENU_METEO = 0,
-    ST_MENU_SPI,
+    ST_MENU_SPI = 0,
     ST_MENU_SETARI,
     ST_MENU_MUZICUTA,
     ST_MENU_UART,
@@ -51,7 +47,6 @@ typedef enum {
 } MainState_t;
 
 const char menu_seg[][SEG_ROW_LEN] = {
-    "Meteo  >",
     "SPI    >",
     "Setari >",
     "Muzicuta",
@@ -59,11 +54,9 @@ const char menu_seg[][SEG_ROW_LEN] = {
 };
 
 // Submenu Enums & Segment Text
-typedef enum { TEMP_BME = 0, PRES_BME, HUM_BME, NUM_SUB_METEO } SubMeteo_t;
-const char submenu_meteo[][SEG_ROW_LEN] = { "TEMP BME", "PRES BME", "HUM  BME" };
 
-typedef enum { TEMP_SPI = 0, POT_SPI, LIGHT_SPI, MOTOR_SPEED, MOTOR_DIR, NUM_SUB_SPI } SubSpi_t;
-const char submenu_spi[][SEG_ROW_LEN] = { "TEMP SPI", "POT  SPI", "LIGHT   ", "MOT  SPD", "MOT  DIR" };
+typedef enum { MOTOR_SPEED, MOTOR_DIR, NUM_SUB_SPI } SubSpi_t;
+const char submenu_spi[][SEG_ROW_LEN] = {"MOT  SPD", "MOT  DIR" };
 
 typedef enum { TONE, DURATION, VOLUME, KEY_BEEP, SAVE, NUM_SUB_SET } SubSet_t;
 const char submenu_setari[][SEG_ROW_LEN] = { "BZZ  TON", "BZZ  DUR", "VOLUME  ", "KEY BEEP", "SAVE SET" };
@@ -89,11 +82,6 @@ const char* const menu_uart_txt[] = {
 };
 
 // Meteo Submenu (Adjusted to fit within the 11-character limit)
-const char* const sub_meteo_uart_txt[] = {
-    "Temp:--.- C", // 11 chars -> |1.Temp:--.- C|
-    "Pres:-- hPa", // 11 chars -> |2.Pres:-- hPa|
-    "Umid:--.- %"  // 11 chars -> |3.Umid:--.- %|
-};
 
 // SPI Submenu (Cleaned and adjusted to the 11-character limit)
 const char* const sub_spi_uart_txt[] = {
@@ -128,7 +116,6 @@ extern const MenuDescriptor_t submenu_descriptors[NUM_STATES];
 // UNIONS & APP CONFIG STRUCTURES
 // =============================================================================
 typedef union {
-    SubMeteo_t meteo;
     SubSpi_t spi;
     SubSet_t setari;
     uint8_t raw;
