@@ -31,7 +31,8 @@ extern __bit spi_motor_dir;
 __bit spi_motor_updated;
 
 
-// Prototipuri func?ii
+
+// Prototipuri functii
 void spi_init(void);
 void spi_isr(void);
 void spi_resync(void);

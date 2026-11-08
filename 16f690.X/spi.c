@@ -11,12 +11,12 @@ volatile uint16_t spi_motor_speed = 0;
 __bit spi_motor_dir;
 __bit spi_motor_updated = 0;
 void spi_init(void) {
-    // 1. Setare direc?ie pini
+    // 1. Setare directie pini
     TRIS_SCK = 1;  // SCK (RB6) = Intrare
     TRIS_SDI = 1;  // SDI (RB4) = Intrare
-    TRIS_SDO = 0;  // SDO (RC7) = Ie?ire
+    TRIS_SDO = 0;  // SDO (RC7) = Iesire
 
-    // Dezactiv?m modulele analogice de pe pinii utiliza?i (AN10 ?i AN9)
+    // Dezactivam modulele analogice de pe pinii utilizati (AN10 si AN9)
     ANSELHbits.ANS9 = 0;  //Dezactiveaza analogic pe SDO
     ANSELHbits.ANS10 = 0; // Dezactiveaza analogic pe SDI
     // 2. Configurare SSPSTAT (CKE=1, potrivit cu Master ASM)

@@ -43,8 +43,8 @@ _hmi_init:
     MOVWF   TRISE               ;PORT E iesire      
     MOVLW   0b00000110          ;Toate porturile digitale      
     MOVWF   ADCON1              ; ADCON1 este tot în Bank 1
-    MOVLW   0b00100000          ;RA5 input      
-    IORWF   TRISA, F		;RA5 input
+    MOVLW   0b00010000          ;RA4 input      
+    IORWF   TRISA, F		;RA4 input
     BCF     TRISC, 0                  
     BCF     TRISC, 1 
     ;BANKSEL CMCON		;tot banc 1
@@ -100,7 +100,7 @@ dp_off:
     CALL    mask_pressed&0x7FF
     
     BANKSEL PORTA               ; Mergem în Bank 0 să citim pinul fizic
-    BTFSS   PORTA, 5                
+    BTFSS   PORTA, 4                
     GOTO    not_pressed_I0&0x7FF
 pressed_I0: 
     BANKSEL _btn_i0state        ; Înapoi în Bank 3 pentru salvare date

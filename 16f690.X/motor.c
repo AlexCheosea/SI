@@ -2,7 +2,6 @@
  * File:   motor.c
  * Author: Alex
  *
- * Created on June 13, 2026, 7:34 AM
  */
 
 

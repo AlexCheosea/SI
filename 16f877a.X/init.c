@@ -1,9 +1,3 @@
-/*
- * File:   init.c
- * Author: Alex
- *
- * Created on June 6, 2026, 4:23 PM
- */
 #define TMR0_RELOAD_VAL 112 //valoarea pentru intrerupere de 1ms
 #define TMR0_SET        0b10000100
 
@@ -14,7 +8,7 @@ void system_init(void) { //apeleaza toate functiile de initializare din assembly
     hmi_init();
     spi_init();
     uart_init();
-    
+    adc_init();
     //Timer0 (Baza de timp HMI))
     OPTION_REG = TMR0_SET;  // Prescaler 1:32 alocat lui Timer0
     TMR0 = TMR0_RELOAD_VAL; // Valoare pentru generare intrerupere la 1 ms 
@@ -42,6 +36,12 @@ void __interrupt() isr(void){
             if(buzzer_ms_ramase == 0){
                 buzzer_off();
             }
+        }
+        if(sample_timer > 0){
+            sample_timer--;
+        }
+        if(motor_voltage_timer > 0){
+            motor_voltage_timer--;
         }
         T0IF = 0;
     }

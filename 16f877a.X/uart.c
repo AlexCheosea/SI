@@ -2,7 +2,6 @@
  * File:   uart.c
  * Author: Alex
  *
- * Created on June 7, 2026, 10:42 PM
  */
 
 

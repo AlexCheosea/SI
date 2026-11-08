@@ -32,6 +32,7 @@ void main(void) {
     display_speed(cruise_speed);
 
     while (1) {
+        analog_update();
         unsigned char key = citeste_tastatura();
 
         switch (key) {

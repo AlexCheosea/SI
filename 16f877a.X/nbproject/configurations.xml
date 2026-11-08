@@ -10,6 +10,7 @@
       <itemPath>hmi.h</itemPath>
       <itemPath>init.h</itemPath>
       <itemPath>main.h</itemPath>
+      <itemPath>analog.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
                    displayName="Important Files"
@@ -32,6 +33,7 @@
       <itemPath>hmi.c</itemPath>
       <itemPath>init.c</itemPath>
       <itemPath>uart.c</itemPath>
+      <itemPath>analog.c</itemPath>
     </logicalFolder>
   </logicalFolder>
   <sourceRootList>
@@ -174,6 +176,7 @@
         <property key="event.recorder.debugger.behavior" value="Running"/>
         <property key="event.recorder.enabled" value="false"/>
         <property key="event.recorder.scvd.files" value=""/>
+        <property key="firmware.download.all" value="false"/>
         <property key="hwtoolclock.frcindebug" value="false"/>
         <property key="lastid" value=""/>
         <property key="memories.aux" value="false"/>
