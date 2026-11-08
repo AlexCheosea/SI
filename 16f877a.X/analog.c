@@ -6,6 +6,8 @@
 
 volatile uint8_t sample_timer = 0;
 volatile uint8_t motor_voltage_timer = 0;
+volatile uint8_t motor_speed_report_timer = 0;
+volatile uint8_t status_report_timer = 0;
 volatile uint16_t sensor_values[SENSOR_COUNT];
 volatile uint16_t motor_voltage;
 
@@ -49,6 +51,9 @@ void analog_update(void) {
     uint16_t sample;
 
     if (motor_voltage_timer == 0) {
+#if USE_DUMMY_MOTOR_VOLTAGE
+        motor_voltage = DUMMY_MOTOR_VOLTAGE_ADC;
+#else
         sample = read_adc(ADC_CHANNEL_MOTOR_VOLTAGE);
         if (motor_voltage_filter_initialized == 0) {
             motor_voltage = sample;
@@ -56,10 +61,16 @@ void analog_update(void) {
         } else {
             motor_voltage = (motor_voltage + sample) >> 1;
         }
+#endif
         motor_voltage_timer = MOTOR_VOLTAGE_TIMER;
     }
 
     if (sample_timer == 0) {
+#if USE_DUMMY_SENSOR_VALUES
+        for (channel = 0; channel < SENSOR_COUNT; channel++) {
+            sensor_values[channel] = DUMMY_SENSOR_ADC_VALUE;
+        }
+#else
         for (channel = 0; channel < SENSOR_COUNT; channel++) {
             sample = read_adc(channel);
             if (sensor_filter_initialized == 0) {
@@ -82,6 +93,7 @@ void analog_update(void) {
         if (sensor_filter_index >= DISTANCE_FIR_LENGTH) {
             sensor_filter_index = 0;
         }
+#endif
         sample_timer = SAMPLE_TIMER;
     }
 }

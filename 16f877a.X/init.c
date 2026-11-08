@@ -1,9 +1,10 @@
 #define TMR0_RELOAD_VAL 112 //valoarea pentru intrerupere de 1ms
 #define TMR0_SET        0b10000100
-
+#define _XTAL_FREQ 18432000UL
 #include <xc.h>
 #include "init.h"
 void system_init(void) { //apeleaza toate functiile de initializare din assembly
+    __delay_ms(50);
     buzzer_init();
     hmi_init();
     spi_init();
@@ -42,6 +43,12 @@ void __interrupt() isr(void){
         }
         if(motor_voltage_timer > 0){
             motor_voltage_timer--;
+        }
+        if(motor_speed_report_timer > 0){
+            motor_speed_report_timer--;
+        }
+        if(status_report_timer > 0){
+            status_report_timer--;
         }
         T0IF = 0;
     }

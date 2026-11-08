@@ -2,42 +2,36 @@
  * File:   main.c
  * Author: Alex
  *
+ * Sclavul: primeste comenzi de viteza/sens prin SPI (in ISR) si ruleaza
+ * rampa de viteza in bucla principala; pasii motorului se fac in ISR (CCP1).
  */
-
-
-#include <xc.h>
-#include "init.h"
-#include "main.h"
 
 #include <xc.h>
 #include <stdint.h>
-//void delay_10ms(uint8_t ticks){
-//    for(uint8_t i = 0; i < ticks; i++){
-//        __delay_ms(10);
-//    }
-//}
-//#define boot_delay delay_10ms
+#include "init.h"
+#include "main.h"
+
 void main(void) {
     system_init();
-    //motor_startup_animation();
-    //rez.fields.humidity = 0;
-    //rez.fields.pressure = 0;
-    //rez.fields.temperature = 0;
-    uint16_t aux; 
-    while(1){
+
+    while (1) {
+        // Resincronizare SPI dupa ~4 ms fara activitate pe magistrala
         di();
         spi_resync();
-        ei();        
-        //__delay_ms(1);
-        if(spi_motor_updated){
-            di(); //dezactivam intreruperile
-            uint16_t speed = spi_motor_speed; //copiem valorile 
+        ei();
+
+        // Copiem atomic comanda primita in ISR-ul SPI, apoi o aplicam ca
+        // tinta pentru rampa (motor_set_target_speed isi face singur
+        // sectiunea critica).
+        if (spi_motor_updated) {
+            di();
+            uint16_t speed = spi_motor_speed;
             uint8_t dir = spi_motor_dir;
             spi_motor_updated = 0;
-            ei(); //PS. nu puteam dezactiva intreruperile direct pentru
-            //motor_set_speed deoarece functia dureaza prea mult
+            ei();
             motor_set_target_speed(speed, dir);
         }
+
+        motor_ramp_task(); // pasul de rampa (la 10 ms), in afara ISR-ului
     }
-    return;
 }

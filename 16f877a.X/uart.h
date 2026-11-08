@@ -14,7 +14,8 @@
 #define UART_BUF_SIZE     16
 #define RX_MSG_TERMINATOR 10
 //===============================================================================
-// VARIABILE EXTERNE (Mapate din Asamblare - Bank 0 RAM)
+// VARIABILE EXTERNE (definite in uart_asm.s: control + TX_BUF in Bank 2,
+// RX_BUF in Bank 3)
 //===============================================================================
 // Buffer-ul de recepție UART (Dimensiune fixă: 16 octeți)
 extern volatile uint8_t UART_RX_BUF[UART_BUF_SIZE];
@@ -56,21 +57,27 @@ extern void uart_rx_isr(void);
  */
 extern void uart_send(void);
 
+//===============================================================================
+// FUNCTII C (uart.c)
+//===============================================================================
+
 /**
- * @brief Verifică dacă s-a primit un mesaj complet.
- * @return Lungimea mesajului primit dacă UART_RX_BUSY == 1, altfel returnează 0.
+ * @brief Verifică dacă s-a primit un mesaj complet (terminat cu '\n').
+ * @return Lungimea mesajului, inclusiv terminatorul, dacă
+ * UART_RX_STATUS == UART_RX_READY, altfel 0.
  */
 uint8_t uart_receive(void);
 
 /**
- * @brief Eliberează buffer-ul de recepție (șterge UART_RX_BUSY).
- * Trebuie apelată obligatoriu din C după ce s-a terminat procesarea mesajului primit.
+ * @brief Eliberează buffer-ul de recepție: îl golește și pune
+ * UART_RX_STATUS = UART_RX_IDLE. Până atunci, octeții noi sunt ignorați.
  */
 void uart_release(void);
 
 /**
- * @brief Afișează un șir de caractere pe UART.
- * @param str Șirul de caractere de afișat.
+ * @brief Trimite un șir pe UART ca o linie: maxim UART_BUF_SIZE-1 (15)
+ * caractere, la care se adaugă '\n'. Așteaptă terminarea liniei anterioare.
+ * @param str Șirul de caractere de trimis.
  */
 void uart_print_string(const char* str);
 

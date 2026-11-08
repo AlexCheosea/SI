@@ -3,7 +3,6 @@
 
 #include <xc.h>
 #include <stdint.h>
-#include <string.h>
 
 #include "init.h"
 #include "buzzer.h"

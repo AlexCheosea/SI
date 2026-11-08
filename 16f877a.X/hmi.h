@@ -30,8 +30,12 @@ void hmi_update(void); // Trebuie apelată în ISR la fiecare 1ms
  */
 void hmi_print_string(const char *str);
 /**
- * Afișează un număr întreg cu semn, aliniat automat la dreapta pe ecran.
+ * Afișează un număr întreg cu semn, aliniat la dreapta într-o fereastră a
+ * afișajului (fereastra este golită înainte; restul afișajului rămâne neatins).
  * @param number Valoarea numerică (-32768 până la 32767).
+ * @param start_pos Prima poziție a ferestrei (0-7).
+ * @param digits Numărul de cifre al ferestrei; dacă numărul are mai multe
+ *               cifre, se păstrează cele mai semnificative.
  */
 void hmi_print_number(int16_t number, uint8_t start_pos, uint8_t digits);
 /**

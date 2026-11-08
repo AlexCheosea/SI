@@ -1,7 +1,6 @@
 #include "spi.h"
 #include "motor.h"
 volatile PachetSPI_t rx_packet;
-volatile PachetSPI_t tx_packet;
 volatile unsigned char spi_index = 0;
 
 
@@ -30,8 +29,7 @@ void spi_init(void) {
     SSPCON = 0b00100101; 
 
     // Incarcam anticipat primul byte in buffer-ul hardware
-    tx_packet.cmd = SPI_ACK; // Byte generic de ACK
-    SSPBUF = tx_packet.raw[0];
+    SSPBUF = SPI_ACK; // Byte generic de ACK
 
     // 4. Activare intreruperi Hardware SPI
     PIR1bits.SSPIF = 0;     
@@ -48,64 +46,52 @@ void spi_resync(void) {
         SSPCONbits.WCOL  = 0;
         SSPCONbits.SSPOV = 0;
         SSPEN = 1;
-        tx_packet.cmd = SPI_ACK;
-        SSPBUF = tx_packet.raw[0];
+        SSPBUF = SPI_ACK;
         TMR0 = 0;
     }
 }
 
-static uint8_t byte_idx = 0;
+// Octetul high al raspunsului, citit in acelasi ISR cu octetul low (la octetul 0)
+// ca valoarea trimisa sa fie consistenta chiar daca main schimba viteza.
+static uint8_t spi_reply_hi;
+
+// Apelata din isr_handler doar cand SSPIF este setat.
 void spi_isr(void) {
+    uint8_t idx = spi_index;
+    uint8_t rx_byte = SSPBUF;   // citirea goleste BF
+
+    // 1. Reincarcam SSPBUF CAT MAI REPEDE: master-ul asteapta doar pauza dintre
+    // octeti. Raspunsul este mereu motor_current_sps (master-ul ignora raspunsul
+    // la CMD_SET_MOTOR_DIR), deci nu mai trebuie sa decodam comanda inainte.
+    if (idx == 0) {
+        SSPBUF = (uint8_t)motor_current_sps;              // Low Byte
+        spi_reply_hi = (uint8_t)(motor_current_sps >> 8);
+    } else if (idx == 1) {
+        SSPBUF = spi_reply_hi;                             // High Byte
+    } else {
+        SSPBUF = SPI_ACK;                                  // pentru pachetul urmator
+    }
+    PIR1bits.SSPIF = 0;
     TMR0 = 0;
-    
     INTCONbits.T0IF = 0;
-    if (PIR1bits.SSPIF) {
-        unsigned char rx_byte = SSPBUF; 
-        
-        rx_packet.raw[spi_index] = rx_byte;
-        spi_index++;
 
-        if (spi_index == 1) {
-            // --- OCTETUL 0: Am primit comanda ---
-            int16_t val_to_send = 0;
-            
-            // Evaluam comanda folosind noul enum
-            switch((SPI_Commands_t)rx_byte) {
-                // Pentru comenzile de SET, Master-ul doar scrie. 
-                // Returnam 0
-
-                case CMD_SET_MOTOR_SPEED:
-                case CMD_SET_MOTOR_DIR:
-                
-                default:
-                    val_to_send = 0;
-                    break;
-            }
-            
-            tx_packet.val = val_to_send;
-            SSPBUF = tx_packet.raw[1]; // Incarcam Low Byte pentru Master
-        } 
-        else if (spi_index == 2) {
-            // --- OCTETUL 1: Master-ul a citit Low Byte ---
-            SSPBUF = tx_packet.raw[2]; // Incarcam High Byte pentru Master
-        } 
-        else if (spi_index >= SPI_BUF_SIZE) {
-            // --- OCTETUL 2: Pachet complet primit si trimis ---
-            spi_index = 0;
-            
-            // Verificam daca Master-ul a trimis o comanda de configurare motor
-            // Datele primite sunt complet asamblate acum in rx_packet.val
-            if (rx_packet.cmd == CMD_SET_MOTOR_SPEED) {
+    // 2. Restul procesarii (nu mai este pe calea critica)
+    rx_packet.raw[idx] = rx_byte;
+    idx++;
+    if (idx >= SPI_BUF_SIZE) {
+        // --- Pachet complet primit ---
+        idx = 0;
+        if (rx_packet.cmd == CMD_SET_MOTOR_SPEED) {
+            if ((uint16_t)rx_packet.val !=
+                motor_target_steps_per_second) {
                 spi_motor_speed = (uint16_t)rx_packet.val;
                 spi_motor_updated = 1;
-            } 
-            else if (rx_packet.cmd == CMD_SET_MOTOR_DIR) {
-                spi_motor_dir = (uint8_t)rx_packet.val;
-                spi_motor_updated = 1;
             }
-            SSPBUF = tx_packet.raw[0]; // Resetam cu ACK pentru pachetul urmator
         }
-
-        PIR1bits.SSPIF = 0; 
+        else if (rx_packet.cmd == CMD_SET_MOTOR_DIR) {
+            spi_motor_dir = (uint8_t)rx_packet.val;
+            spi_motor_updated = 1;
+        }
     }
+    spi_index = idx;
 }

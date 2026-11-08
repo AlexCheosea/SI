@@ -62,7 +62,7 @@ _uart_init:
     ; Baudrate 230400 -> SPBRG  = 4   (0x04)	;
     ; Baudrate 384000 -> SPBRG  = 2   (0x02)	;
     ;-------------------------------------------;
-    MOVLW   9                     
+    MOVLW   2                       ; 384000 baud (exact la 18.432 MHz)
     MOVWF   SPBRG
     BCF     TXSTA, TXSTA_SYNC_POSN   
     

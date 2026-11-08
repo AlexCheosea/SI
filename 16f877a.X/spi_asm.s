@@ -10,11 +10,11 @@ GLOBAL _spi_buf
 ;===============================================================================
 ; SECTIUNEA DE DATE (RAM - ALOCATĂ ÎN BANC 3)
 ;===============================================================================
-global _temp_var ;variabila temporara refolosita, a nu se folosi in intreruperi
 PSECT spi_data_bank3,global,class=BANK3,space=1,noexec
 
 _spi_buf:       DS SPI_BUF_SIZE    ; Buffer de SPI_BUF_SIZE octeți, alocat în Bancul 3
 _spi_counter:   DS 1		   ; Contor intern mutat tot în Bancul 3
+_spi_delay_counter: DS 1
 ;===============================================================================
 ; SECTIUNEA DE COD
 ;===============================================================================
@@ -37,7 +37,7 @@ _spi_init:
     
     ; Activăm modulul hardware în Banc 0
     BANKSEL SSPCON
-    MOVLW   0b00100010                  ; SSPEN=1, CKP=0, Master Fosc/64
+    MOVLW   0b00100000                  ; SSPEN=1, CKP=0, Master Fosc/4
     MOVWF   SSPCON
     RETURN
 
@@ -79,19 +79,21 @@ spi_wait_bf:
     
     ; Pasul 6: Incrementăm pointerul FSR pentru următorul element din masiv
     INCF    FSR, F                      
-spi_delay: ;Delay intre octeti pentru a da timp de raspuns
-    BANKSEL _temp_var ; BANK 0 -> BANK 3
-    DECFSZ  BANKMASK(_temp_var)
-    GOTO    spi_delay&0x7FF
-    MOVLW   0x7F
-    MOVWF   BANKMASK(_temp_var)
-    ; Pasul 7: Decrementăm contorul (aflat în Bancul 3) și verificăm dacă am terminat
-    DECFSZ  BANKMASK(_spi_counter), F      
-    GOTO    spi_loop&0x7FF
+    ; Decrementăm contorul înainte de a introduce delay-ul. Astfel, nu
+    ; întârziem după ultimul octet, înaintea următorului pachet.
+    BANKSEL _spi_counter
+    DECFSZ  BANKMASK(_spi_counter), F
+    GOTO    spi_delay
+    RETURN
 
-    ; Curățenie la final: lăsăm controllerul în Bancul 0 (convenție standard XC8)
-    ;BANKSEL 0
-    ;BCF     STATUS, STATUS_IRP_POSN     ; Resetăm IRP pentru a reveni la comportamentul normal
-    RETURN                              
+spi_delay: ;Delay intre octeti pentru a da timp de raspuns
+    BANKSEL _spi_delay_counter
+    MOVLW   0x2F
+    MOVWF   BANKMASK(_spi_delay_counter)
+spi_delay_inner:
+    DECFSZ  BANKMASK(_spi_delay_counter), F
+    GOTO    spi_delay_inner&0x7FF
+    ; Continuăm cu următorul octet după delay.
+    GOTO    spi_loop&0x7FF
 
 END
