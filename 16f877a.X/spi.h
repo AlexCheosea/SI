@@ -5,8 +5,9 @@
 #define SPI_BUF_SIZE 3  // Dimensiunea bufferului de transfer SPI (în octeți)
 #define DIR_CW   1
 #define DIR_CCW  0
-// Bufferul fizic alocat in limbaj de asamblare
-extern volatile unsigned char __section("spi_data_bank3") spi_buf[SPI_BUF_SIZE];
+// Bufferul fizic alocat in limbaj de asamblare (spi_asm.s, class=BANK3).
+// __bank(3) ii spune compilatorului bancul (necesita -maddrqual=require).
+extern volatile __bank(3) unsigned char spi_buf[SPI_BUF_SIZE];
 
 // Structura polimorfă de SPI_BUF_SIZE octeți, care poate fi interpretată în mai multe moduri
 typedef union {
@@ -36,4 +37,4 @@ typedef enum {
 
 
 
-#endif	/* SPI_H */
+#endif	/* SPI_H */

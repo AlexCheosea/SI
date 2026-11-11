@@ -10,14 +10,16 @@
 #define RED 1
 #define GRN 0
 #define DISP_BUF_SIZE 8
-// Variable brute exportate direct din asamblare
-extern volatile uint8_t disp_buf[DISP_BUF_SIZE];
-extern volatile uint8_t bar_red_low;
-extern volatile uint8_t bar_red_high;
-extern volatile uint8_t bar_grn_low;
-extern volatile uint8_t bar_grn_high;
-extern volatile uint8_t btn_i0event;
-extern volatile int8_t  dp_pos;
+// Variable brute exportate direct din asamblare (hmi_asm.s, PSECT udata_bank3).
+// __bank(3) ii spune compilatorului bancul (necesita -maddrqual=require);
+// trebuie sa corespunda cu class=BANK3 din fisierul .s.
+extern volatile __bank(3) uint8_t disp_buf[DISP_BUF_SIZE];
+extern volatile __bank(3) uint8_t bar_red_low;
+extern volatile __bank(3) uint8_t bar_red_high;
+extern volatile __bank(3) uint8_t bar_grn_low;
+extern volatile __bank(3) uint8_t bar_grn_high;
+extern volatile __bank(3) uint8_t btn_i0event;
+extern volatile __bank(3) int8_t  dp_pos;
 // Rutinele native din asamblare
 void hmi_init(void);
 void hmi_update(void); // Trebuie apelată în ISR la fiecare 1ms
@@ -55,4 +57,4 @@ unsigned char citeste_tastatura(void);
 // 0-7 pentru pozitia digit point
 // trebuie scris dupa afisarea unui caracter la acea pozitie
 #define set_dp_pos(pos)         (dp_pos = (pos))
-#endif /* HMI_H */
+#endif /* HMI_H */

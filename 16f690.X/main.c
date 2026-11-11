@@ -15,7 +15,7 @@ void main(void) {
     system_init();
 
     while (1) {
-        // Resincronizare SPI dupa ~4 ms fara activitate pe magistrala
+        // Resincronizare SPI daca nu este activitate pe magistrala
         di();
         spi_resync();
         ei();

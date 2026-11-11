@@ -15,20 +15,21 @@
 #define RX_MSG_TERMINATOR 10
 //===============================================================================
 // VARIABILE EXTERNE (definite in uart_asm.s: control + TX_BUF in Bank 2,
-// RX_BUF in Bank 3)
+// RX_BUF in Bank 3). __bank(n) ii spune compilatorului bancul (necesita
+// -maddrqual=require); trebuie sa corespunda cu class=BANKn din uart_asm.s.
 //===============================================================================
 // Buffer-ul de recepție UART (Dimensiune fixă: 16 octeți)
-extern volatile uint8_t UART_RX_BUF[UART_BUF_SIZE];
+extern volatile __bank(3) uint8_t UART_RX_BUF[UART_BUF_SIZE];
 // Buffer-ul de transmisie UART (Dimensiune fixă: 16 octeți)
-extern volatile uint8_t UART_TX_BUF[UART_BUF_SIZE];
+extern volatile __bank(2) uint8_t UART_TX_BUF[UART_BUF_SIZE];
 // Lungimea mesajului primit în buffer-ul de recepție
-extern volatile uint8_t UART_RX_LEN;
+extern volatile __bank(2) uint8_t UART_RX_LEN;
 // Lungimea pachetului care urmează să fie trimis (Trebuie scrisă din C înainte de uart_send)
-extern volatile uint8_t UART_TX_LEN;
+extern volatile __bank(2) uint8_t UART_TX_LEN;
 // Variabila status curent transmisie
-extern volatile uint8_t UART_TX_STATUS;
+extern volatile __bank(2) uint8_t UART_TX_STATUS;
 // Variabila status curent receptie
-extern volatile uint8_t UART_RX_STATUS;
+extern volatile __bank(2) uint8_t UART_RX_STATUS;
 //===============================================================================
 // PROTOTIPURI DE FUNCTII (Exportate din driverul de asamblare)
 //===============================================================================
@@ -89,4 +90,4 @@ void uart_print_string(const char* str);
 uint8_t uart_read_string(char *out_buf);
 
 
-#endif // UART_H
+#endif // UART_H
