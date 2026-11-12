@@ -8,6 +8,20 @@ extern void buzzer_on(void);
 extern void buzzer_off(void);
 
 volatile unsigned int buzzer_ms_ramase = 0;
+
+// ---------------------------------------------------------------------------
+// Buzzer de parcare (bip-uri generate in intreruperea de 1 ms)
+// ---------------------------------------------------------------------------
+#define BUZZER_TONE      DO7    // nota bip-ului (NoteMuzicale_t), setata la initializare
+#define BUZZER_VOLUME    5      // volumul (0-10), setat la initializare
+#define BUZZER_BEEP_TIME 6U     // durata unui bip, in unitati de 10 ms
+#define BUZZER_MIN_GAP   4U     // pauza cea mai scurta dintre bip-uri, in unitati de 10 ms
+
+// Cele doua contoare, scrise din main.c si citite in intrerupere (unitati de 10 ms):
+//   buzzer_on_time  = durata unui bip;          0 = buzzer oprit
+//   buzzer_off_time = pauza dintre doua bip-uri; 0 = sunet continuu
+extern volatile unsigned char buzzer_on_time;
+extern volatile unsigned char buzzer_off_time;
 // Structura pe octave (începând cu RE6 = 1175 Hz)
 typedef enum {
     RE6 = 0, RE_SHARP6, MI6, FA6, FA_SHARP6, SOL6, SOL_SHARP6, LA6, LA_SHARP6, SI6,
@@ -32,5 +46,11 @@ void buzzer_set_volume(unsigned char level_0_to_10);
 */
 void buzzer_play_note(NoteMuzicale_t index_nota, unsigned int durata_ms);
 void buzzer_apply_volume(void);
+/**
+ * @brief Seteaza nota si volumul buzzerului fara sa porneasca sau sa opreasca
+ * sunetul. Se apeleaza doar din bucla principala (contine o inmultire pe 32 de
+ * biti); poate fi apelata si in timp ce intreruperea genereaza bip-uri.
+ */
+void buzzer_setup(NoteMuzicale_t nota, unsigned char level_0_to_10);
 
 #endif	/* BUZZER_H */

@@ -8,23 +8,26 @@
 #include <xc.h>
 #include "uart.h"
 void uart_print_string(const char* str){
+    uint8_t len = 0;
+    char c;
+
     while(UART_TX_STATUS == UART_TX_BUSY); //Așteptăm finalizarea ultimei transmisii
     if(UART_TX_STATUS == UART_TX_ERROR) {
         // Resetăm starea de eroare
         UART_TX_STATUS = UART_TX_IDLE;
     }
-    di();
-    for(UART_TX_LEN = 0; (UART_TX_LEN < UART_BUF_SIZE - 1) && (str[UART_TX_LEN] != '\0'); UART_TX_LEN++){
-        UART_TX_BUF[UART_TX_LEN] = (unsigned char)str[UART_TX_LEN];
+    // Transmisia este oprită în acest punct, deci întreruperea TX nu atinge
+    // bufferul: nu este nevoie de di()/ei(). Fiecare caracter este citit o
+    // singură dată, iar contorul este local (UART_TX_LEN este volatile).
+    while((len < UART_BUF_SIZE - 1) && ((c = *str++) != '\0')){
+        UART_TX_BUF[len++] = (unsigned char)c;
     }
-    
-    // În acest punct, UART_TX_LEN indică EXACT prima poziție liberă din buffer
-    // (care va fi maxim 15, adică ultima poziție din buffer)
-    UART_TX_BUF[UART_TX_LEN] = RX_MSG_TERMINATOR; 
-    
-    // Incrementăm ca să includem și terminatorul în lungimea totală transmisă
-    UART_TX_LEN++; 
-    ei();
+
+    // len indică prima poziție liberă din buffer (maxim 15): terminatorul
+    UART_TX_BUF[len++] = RX_MSG_TERMINATOR;
+
+    // Lungimea totală transmisă, inclusiv terminatorul
+    UART_TX_LEN = len;
     uart_send();
     return;
 }

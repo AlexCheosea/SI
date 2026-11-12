@@ -28,6 +28,10 @@ static __bit motor_undervoltage;
 static __bit motor_overvoltage;
 static __bit path_stop;                  // obstacol la STOP sau mai aproape
 static __bit path_slow;                  // obstacol mai aproape de FAR
+static __bit cruise_speed_changed;       // setat la orice modificare a cruise_speed
+static uint8_t buzzer_volume = BUZZER_VOLUME;   // 0-10
+static uint8_t buzzer_tone = BUZZER_TONE;       // index in NoteMuzicale_t (0 .. NUM_NOTES-1)
+static __bit buzzer_settings_changed;    // volum / nota de aplicat in bucla principala
 
 // ===========================================================================
 // Conversii de viteza
@@ -113,6 +117,59 @@ static void update_obstacle_status(void) {
     }
 }
 
+// Panta rampei de incetinire: cruise_speed * 256 / (FAR - STOP), adica pasi/s
+// pe sfert de centimetru, cu 8 biti fractionari. Se recalculeaza doar cand
+// cruise_speed_changed este setat, fiindca impartirea pe 32 de biti e scumpa.
+static uint16_t ramp_step_q8;
+
+// Volumul si nota bip-ului. Aici se schimba doar valorile; ele sunt aplicate
+// in bucla principala (buzzer_setup este lenta), nu in intrerupere.
+static void change_buzzer_volume(uint8_t increase) {
+    if (increase) {
+        if (buzzer_volume < 10U) {
+            buzzer_volume++;
+        }
+    } else if (buzzer_volume > 0U) {
+        buzzer_volume--;
+    }
+    buzzer_settings_changed = 1;
+}
+
+// Nota urmatoare / anterioara, cu revenire la celalalt capat al listei.
+static void change_buzzer_tone(uint8_t increase) {
+    if (increase) {
+        buzzer_tone = (buzzer_tone >= NUM_NOTES - 1U) ? 0U : buzzer_tone + 1U;
+    } else {
+        buzzer_tone = (buzzer_tone == 0U) ? (uint8_t)(NUM_NOTES - 1U)
+                                          : buzzer_tone - 1U;
+    }
+    buzzer_settings_changed = 1;
+}
+
+// Buzzer de parcare: fara sunet cand drumul e liber, bip-uri tot mai dese pe
+// masura ce obstacolul se apropie, sunet continuu la STOP. Aici se scriu doar
+// cele doua contoare; pornirea / oprirea se face in intreruperea de 1 ms.
+static void update_parking_buzzer(void) {
+    uint8_t distance;
+
+    if (path_stop) {
+        buzzer_off_time = 0;                    // continuu
+        buzzer_on_time = BUZZER_BEEP_TIME;
+    } else if (path_slow) {
+        distance = closest_obstacle();
+        if (distance < DISTANCE_STOP) {
+            distance = DISTANCE_STOP;
+        }
+        // Pauza creste cu distanta: 10 ms pentru fiecare jumatate de cm peste
+        // STOP (40 ms langa STOP, ~740 ms la FAR).
+        buzzer_off_time = (uint8_t)(BUZZER_MIN_GAP +
+                                    ((uint8_t)(distance - DISTANCE_STOP) >> 1));
+        buzzer_on_time = BUZZER_BEEP_TIME;
+    } else {
+        buzzer_on_time = 0;                     // oprit
+    }
+}
+
 // Viteza trimisa motorului: cea de croaziera, redusa liniar intre FAR si STOP.
 static uint16_t calculate_effective_speed(void) {
     uint8_t distance;
@@ -131,21 +188,48 @@ static uint16_t calculate_effective_speed(void) {
     if (distance <= DISTANCE_STOP) {
         return 0;
     }
-    return (uint16_t)(((uint32_t)cruise_speed * (distance - DISTANCE_STOP)) /
-                      (DISTANCE_FAR - DISTANCE_STOP));
+    if (cruise_speed_changed) {
+        cruise_speed_changed = 0;
+        ramp_step_q8 = (uint16_t)(((uint32_t)cruise_speed << 8) /
+                                  (DISTANCE_FAR - DISTANCE_STOP));
+    }
+    // Distanta (8 biti) este primul operand: inmultirea face cate o iteratie
+    // pentru fiecare bit al primului operand. Produsul incape pe 24 de biti.
+    return (uint16_t)(((__uint24)(uint8_t)(distance - DISTANCE_STOP) *
+                       ramp_step_q8) >> 8);
 }
 
 // Numarul de LED-uri aprinse (0-10) pentru o citire de senzor:
 // 0 la FAR sau mai departe, 10 la STOP sau mai aproape.
+//
+// Intre STOP si FAR numarul vine dintr-un tabel cu o intrare la fiecare 8
+// unitati de distanta (2 cm), ca sa nu se faca o inmultire si o impartire la
+// fiecare actualizare. Intrarile se calculeaza la compilare din DISTANCE_FAR si
+// DISTANCE_STOP (valoarea formulei la mijlocul fiecarui pas), deci urmaresc
+// automat pragurile. Fata de formula exacta, langa o granita poate aparea un
+// LED in plus sau in minus.
+#define LED_LUT_SHIFT 3U                        // 2^3 = 8 unitati pe intrare
+#define LED_LUT_SIZE  18U                       // acopera o zona de pana la 144 de unitati (36 cm)
+#define LED_AT(i) ((uint8_t)(((DISTANCE_FAR - (DISTANCE_STOP + (i) * 8U + 4U)) * 10U) / \
+                             (DISTANCE_FAR - DISTANCE_STOP)))
+// Eroare de compilare daca zona STOP..FAR nu mai incape in tabel
+typedef char led_lut_covers_zone[
+    ((DISTANCE_FAR - DISTANCE_STOP + 7U) / 8U <= LED_LUT_SIZE) ? 1 : -1];
+
 static uint8_t sensor_to_led_count(uint8_t distance) {
+    static const uint8_t led_lut[LED_LUT_SIZE] = {
+        LED_AT(0),  LED_AT(1),  LED_AT(2),  LED_AT(3),  LED_AT(4),  LED_AT(5),
+        LED_AT(6),  LED_AT(7),  LED_AT(8),  LED_AT(9),  LED_AT(10), LED_AT(11),
+        LED_AT(12), LED_AT(13), LED_AT(14), LED_AT(15), LED_AT(16), LED_AT(17)
+    };
+
     if (distance <= DISTANCE_STOP) {
         return 10U;
     }
     if (distance >= DISTANCE_FAR) {
         return 0U;
     }
-    return (uint8_t)(((DISTANCE_FAR - distance) * 10U) /
-                     (DISTANCE_FAR - DISTANCE_STOP));
+    return led_lut[(uint8_t)(distance - DISTANCE_STOP) >> LED_LUT_SHIFT];
 }
 
 // Bargraph-urile arata senzorii din sensul de mers.
@@ -158,11 +242,11 @@ static void display_direction_sensors(void) {
 
 // ===========================================================================
 // Terminal (UART + coduri ANSI)
-// Ecran (terminal de minim 29 de randuri):
-//   randurile  1-11 : starea, rescrisa pe loc la fiecare raport (latime fixa)
-//   randurile 13-20 : meniul de comenzi
-//   randul       21 : "-- HISTORY --"
-//   randurile 22-29 : istoricul comenzilor (regiune de derulare proprie)
+// Ecran (terminal de minim 32 de randuri):
+//   randurile  1-14 : starea, rescrisa pe loc la fiecare raport (latime fixa)
+//   randurile 16-23 : meniul de comenzi
+//   randul       24 : "-- HISTORY --"
+//   randurile 25-32 : istoricul comenzilor (regiune de derulare proprie)
 // ===========================================================================
 // Setat la pornire si la o linie goala (Enter): urmatorul raport redeseneaza
 // tot ecranul (meniu + regiunea de istoric).
@@ -182,19 +266,29 @@ static uint8_t line_put_str(volatile char *line, uint8_t pos,
 static uint8_t line_put_uint(volatile char *line, uint8_t pos, uint16_t value,
                              uint8_t width) {
     char digits[5];
-    uint8_t count = 0;
+    uint8_t first = 0;      // indexul primei cifre semnificative
+    uint8_t count;
+    uint8_t d;
 
-    do {
-        digits[count++] = (char)('0' + (value % 10U));
-        value /= 10U;
-    } while (value != 0U && count < sizeof(digits));
+    // Cifrele se obtin prin scaderi repetate, de la cea mai mare putere a lui
+    // 10: fara impartiri (o impartire pe 16 biti costa cateva sute de cicluri).
+    d = 0; while (value >= 10000U) { value -= 10000U; d++; } digits[0] = (char)('0' + d);
+    d = 0; while (value >= 1000U)  { value -= 1000U;  d++; } digits[1] = (char)('0' + d);
+    d = 0; while (value >= 100U)   { value -= 100U;   d++; } digits[2] = (char)('0' + d);
+    d = 0; while (value >= 10U)    { value -= 10U;    d++; } digits[3] = (char)('0' + d);
+    digits[4] = (char)('0' + (uint8_t)value);
+
+    while (first < 4U && digits[first] == '0') {
+        first++;                        // sarim zerourile din fata (ramane macar o cifra)
+    }
+    count = (uint8_t)(5U - first);
 
     while (width > count && pos < LINE_MAX) {
         line[pos++] = ' ';
         width--;
     }
-    while (count > 0U && pos < LINE_MAX) {
-        line[pos++] = digits[--count];
+    while (first < 5U && pos < LINE_MAX) {
+        line[pos++] = digits[first++];
     }
     return pos;
 }
@@ -262,7 +356,7 @@ static void update_motor_voltage_status(void) {
 }
 
 /**
- * Raportul de stare, rescris pe loc in randurile 1-11:
+ * Raportul de stare, rescris pe loc in randurile 1-14:
  *   --STATUS--
  *   DIR FORWARD | DIR BACKWARD
  *   CRUISE <n>RPM   viteza setata de utilizator
@@ -272,6 +366,9 @@ static void update_motor_voltage_status(void) {
  *   S0F/S1F/S2B/S3B <adc> <cm>.<cc>  senzorii de distanta (F = fata, B = spate),
  *                                    in centimetri cu pas de 0.25
  *   VMOT <v>.<cc>V  tensiunea motorului
+ *   VOLTAGE OK | UNDERVOLTAGE | OVERVOLTAGE
+ *   VOLUME <n>/10   volumul bip-ului
+ *   TONE <n>/<total>  nota bip-ului (1 = cea mai joasa)
  * Daca term_redraw_pending e setat, intai sterge ecranul, deseneaza meniul si
  * seteaza regiunea de derulare pentru istoric.
  * Blocheaza cat dureaza trimiterea liniilor (ultima linie pleaca in fundal).
@@ -290,16 +387,18 @@ static void uart_print_status(void) {
         term_redraw_pending = 0;
         // ESC[r = fara regiune de derulare, ESC[2J = sterge ecranul
         uart_print_string("\x1b[r\x1b[2J");
-        // ESC[13H = cursor la randul 13; meniul ocupa randurile 13-20
-        uart_print_string("\x1b[13H--MENU--\r");
+        // ESC[16H = cursor la randul 16; meniul ocupa randurile 16-23
+        uart_print_string("\x1b[16H--MENU--\r");
         term_print_text("1   reverse");
         term_print_text("2/3 +/-10RPM");
         term_print_text("4/5 +/-100RPM");
         term_print_text("6 max   0 stop");
+        term_print_text("8/9 +/-VOLUME");
+        term_print_text("10/11 +/-TONE");
         term_print_text("Enter = redraw");
-        term_print_text("-- HISTORY --");          // randul 21
-        // ESC[22;29r = regiune de derulare doar pentru istoric (randurile 22-29)
-        uart_print_string("\x1b[22;29r");
+        term_print_text("-- HISTORY --");          // randul 24
+        // ESC[25;32r = regiune de derulare doar pentru istoric (randurile 25-32)
+        uart_print_string("\x1b[25;32r");
     }
 
     // ESC[H = cursor la (1,1); liniile au latime fixa si se suprascriu
@@ -349,12 +448,20 @@ static void uart_print_status(void) {
     pos = line_put_str(line, pos, "V");
     line_send(line, pos);
     if (motor_overvoltage) {
-        term_print_text("OVERVOLTAGE");
+        term_print_text("OVERVOLTAGE ");
     } else if (motor_undervoltage) {
         term_print_text("UNDERVOLTAGE");
     } else {
-        term_print_text("VOLTAGE OK");
+        term_print_text("VOLTAGE OK  ");
     }
+
+    // Buzzer: "VOLUME <n>/10" si "TONE <n>/<total>" (nota numarata de la 1)
+    term_print_value("VOLUME ", buzzer_volume, 2, "/10");
+    pos = line_put_str(line, 0, "TONE ");
+    pos = line_put_uint(line, pos, buzzer_tone + 1U, 2);
+    pos = line_put_str(line, pos, "/");
+    pos = line_put_uint(line, pos, NUM_NOTES, 1);
+    line_send(line, pos);
 }
 
 /**
@@ -363,6 +470,7 @@ static void uart_print_status(void) {
  *   1 inverseaza sensul
  *   2/3 +/-10 RPM   4/5 +/-100 RPM
  *   6 viteza maxima   0 stop (viteza 0, cu rampa)
+ *   8/9 +/- volumul bip-ului   10/11 +/- nota bip-ului (cu revenire)
  * Linie goala (doar Enter): redeseneaza ecranul.
  * Fiecare comanda adauga in istoric linia "<comanda> <actiune>",
  * de ex. "2 +10RPM"; orice altceva apare ca "<text> ?".
@@ -409,6 +517,7 @@ static void uart_handle_command(void) {
     switch (number) {
         case 0:
             cruise_speed = 0;
+            cruise_speed_changed = 1;
             action = "STOP";
             break;
         case 1:
@@ -428,23 +537,33 @@ static void uart_handle_command(void) {
                 rpm = (rpm > delta) ? rpm - delta : 0;
             }
             cruise_speed = rpm_to_sps(rpm);
+            cruise_speed_changed = 1;
             break;
         }
         case 6:
             cruise_speed = MAX_CRUISE_SPEED;
+            cruise_speed_changed = 1;
             action = "MAX";
+            break;
+        case 8: case 9:
+            change_buzzer_volume((uint8_t)(number == 8U));
+            action = (number == 8U) ? "VOL+" : "VOL-";
+            break;
+        case 10: case 11:
+            change_buzzer_tone((uint8_t)(number == 10U));
+            action = (number == 10U) ? "TONE+" : "TONE-";
             break;
         default:
             break;              // necunoscuta: in istoric apare "<text> ?"
     }
 
-    // Linia din istoric: ESC[29H = ultimul rand al regiunii; '\n'-ul adaugat de
+    // Linia din istoric: ESC[32H = ultimul rand al regiunii; '\n'-ul adaugat de
     // uart_print_string deruleaza regiunea, deci istoricul urca cu un rand.
     // Linia se construieste intr-un buffer local (Bank 0), NU in UART_RX_BUF:
     // acesta e definit in asamblare (Bank 3), compilatorul nu-i cunoaste
     // bancul si un pointer catre el ar scrie in Bank 0/1 (IRP = 0).
     // UART_RX_BUF este accesat doar direct, prin index.
-    pos = line_put_str(line, 0, "\x1b[29H");
+    pos = line_put_str(line, 0, "\x1b[32H");
     if (number == 0xFF) {
         pos = line_put_str(line, pos, "?");
     } else {
@@ -477,7 +596,11 @@ void main(void) {
     motor_overvoltage = 0;
     path_stop = 0;
     path_slow = 0;
+    cruise_speed_changed = 1;          // calculeaza panta la prima folosire
+    buzzer_settings_changed = 0;
     system_init();
+    buzzer_off();                      // buzzer_init lasa PWM-ul pornit (cu factor 0)
+    buzzer_setup((NoteMuzicale_t)buzzer_tone, buzzer_volume);
     actual_speed = (uint16_t)send_motor_command(
         CMD_SET_MOTOR_SPEED, (int16_t)cruise_speed);
     send_motor_command(CMD_SET_MOTOR_DIR, (int16_t)motor_direction);
@@ -488,32 +611,50 @@ void main(void) {
         if(analog_update()){
             update_motor_voltage_status();
             update_obstacle_status();
+            update_parking_buzzer();
             display_direction_sensors();
         }
+        // Volumul / nota bip-ului se aplica aici, nu in intrerupere
+        if (buzzer_settings_changed) {
+            buzzer_settings_changed = 0;
+            buzzer_setup((NoteMuzicale_t)buzzer_tone, buzzer_volume);
+        }
+
         // Butoane: 0/1 = -100/-10 RPM, 2/3 = +10/+100 RPM,
-        //          4 = inapoi, 5 = inainte
+        //          4 = schimba sensul, 5/6 = volum bip -/+,
+        //          7 = nota urmatoare a bip-ului (cu revenire la prima)
         switch (citeste_tastatura()) {
             case '0':
                 cruise_speed = (cruise_speed >= BUTTON_LARGE_STEP)
                     ? cruise_speed - BUTTON_LARGE_STEP : 0;
+                cruise_speed_changed = 1;
                 break;
             case '1':
                 cruise_speed = (cruise_speed >= BUTTON_SMALL_STEP)
                     ? cruise_speed - BUTTON_SMALL_STEP : 0;
+                cruise_speed_changed = 1;
                 break;
             case '2':
                 cruise_speed = (cruise_speed <= MAX_CRUISE_SPEED - BUTTON_SMALL_STEP)
                     ? cruise_speed + BUTTON_SMALL_STEP : MAX_CRUISE_SPEED;
+                cruise_speed_changed = 1;
                 break;
             case '3':
                 cruise_speed = (cruise_speed <= MAX_CRUISE_SPEED - BUTTON_LARGE_STEP)
                     ? cruise_speed + BUTTON_LARGE_STEP : MAX_CRUISE_SPEED;
+                cruise_speed_changed = 1;
                 break;
             case '4':
-                set_motor_direction(DIR_CCW);
+                set_motor_direction((motor_direction == DIR_CW) ? DIR_CCW : DIR_CW);
                 break;
             case '5':
-                set_motor_direction(DIR_CW);
+                change_buzzer_volume(0);
+                break;
+            case '6':
+                change_buzzer_volume(1);
+                break;
+            case '7':
+                change_buzzer_tone(1);
                 break;
             default:
                 break;

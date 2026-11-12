@@ -3,6 +3,18 @@
 
 unsigned char buzzer_volume_level = 5; // Default: Volum mediu (Treapta 5 din 10)
 
+// Contoarele buzzerului de parcare (vezi buzzer.h); la pornire: oprit
+volatile unsigned char buzzer_on_time = 0;
+volatile unsigned char buzzer_off_time = 0;
+
+void buzzer_setup(NoteMuzicale_t nota, unsigned char level_0_to_10) {
+    if (level_0_to_10 > 10) level_0_to_10 = 10;
+    if (nota >= NUM_NOTES) nota = (NoteMuzicale_t)(NUM_NOTES - 1);
+    buzzer_volume_level = level_0_to_10;
+    PR2 = (uint8_t)(buzzer_get_note_value(nota));
+    buzzer_apply_volume();      // nu porneste si nu opreste sunetul
+}
+
 void buzzer_set_step_tone(unsigned char mult_50hz) {
     buzzer_off();
     if (mult_50hz < MIN_MULT_50HZ) {
@@ -42,8 +54,11 @@ void buzzer_apply_volume(void) {
     unsigned int max_vol = PR2 + 1;
     
     if (buzzer_volume_level == 0) {
+        // Secțiune critică: întreruperea de 1 ms schimbă biții de mod din CCP1CON
+        di();
         CCPR1L = 0;      // Primii 8 MSB se află în CCPR1L
         CCP1CON &= 0xCF; // Stingem și cei 2 biți de jos (biții 5 și 4)
+        ei();
     } 
     else {
         // Valoarea maximă a duty-cycle-ului pe 10 biți este (PR2 + 1) * 4.
@@ -63,9 +78,13 @@ void buzzer_apply_volume(void) {
         
         // 2. Încărcăm cei 10 biți rezultați în registrele hardware ale PIC-ului
         // Cei mai semnificativi 8 biți se duc în CCPR1L (shiftare la dreapta cu 2)
+        // Secțiune critică scurtă: CCP1CON este citit și rescris aici, iar
+        // întreruperea de 1 ms îi schimbă biții de mod (buzzer_on / buzzer_off).
+        di();
         CCPR1L = (unsigned char)(duty_10bit >> 2);
         
         // Cei 2 biți rămași jos (biții 1 și 0 din duty_10bit) se pun în CCP1CON pe pozițiile 5 și 4
         CCP1CON = (uint8_t)((CCP1CON & 0xCF) | ((unsigned char)(duty_10bit & 0x03) << 4));
+        ei();
     }
 }
