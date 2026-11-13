@@ -18,8 +18,6 @@ _spi_init:
     BSF     TRISC, 4                    ; RC4 = SDI
     BCF     TRISC, 5                    ; RC5 = SDO
 
-    CLRF    SSPCON
-    BANKSEL SSPSTAT
     MOVLW   0b01000000
     MOVWF   SSPSTAT                     ; SSPSTAT: SMP = momentul esantionarii, CKE = frontul de ceas al transmisiei
     

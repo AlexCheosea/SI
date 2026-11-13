@@ -33,8 +33,7 @@ _buzzer_init:
 _buzzer_on:
     BANKSEL CCP1CON
     MOVLW   0x0C                        ; CCP1CON<3:0> = CCP1M, modul CCP1
-    IORWF   CCP1CON,F
-    MOVWF   CCP1CON
+    IORWF   CCP1CON,F                   ; DC1B<5:4> raman neschimbati
     RETURN
 
 _buzzer_off:
