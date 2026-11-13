@@ -1,6 +1,6 @@
 /* * File:   hmi.h
  * Author: Alexandru Gabriel Cheosea
- * Comments: Interfață de abstractizare (Wrapper) pentru modulul HMI
+ * Comments: interfata C pentru modulul HMI (hmi_asm.s)
  */
 
 #ifndef HMI_H
@@ -10,9 +10,8 @@
 #define RED 1
 #define GRN 0
 #define DISP_BUF_SIZE 8
-// Variable brute exportate direct din asamblare (hmi_asm.s, PSECT udata_bank3).
-// __bank(3) ii spune compilatorului bancul (necesita -maddrqual=require);
-// trebuie sa corespunda cu class=BANK3 din fisierul .s.
+// Variabile definite in hmi_asm.s; __bank(n) trebuie sa corespunda cu
+// class=BANKn de acolo (necesita -maddrqual=require).
 extern volatile __bank(3) uint8_t disp_buf[DISP_BUF_SIZE];
 extern volatile __bank(3) uint8_t bar_red_low;
 extern volatile __bank(3) uint8_t bar_red_high;
@@ -20,41 +19,22 @@ extern volatile __bank(3) uint8_t bar_grn_low;
 extern volatile __bank(3) uint8_t bar_grn_high;
 extern volatile __bank(3) uint8_t btn_i0event;
 extern volatile __bank(3) int8_t  dp_pos;
-// Rutinele native din asamblare
+// Rutine din asamblare
 void hmi_init(void);
-void hmi_update(void); // Trebuie apelată în ISR la fiecare 1ms
-// ===================================================================
-// API HIGHER-LEVEL (WRAPPER C)
-// ===================================================================
-/**
- * Trimite un șir de caractere ASCII către bufferul de afișare pe segmente.
- * @param str Șir de caractere (maxim 8 caractere vizibile).
- */
+void hmi_update(void); // din ISR, la fiecare tick
+
+// Afiseaza un sir ASCII (maxim DISP_BUF_SIZE caractere)
 void hmi_print_string(const char *str);
-/**
- * Afișează un număr întreg cu semn, aliniat la dreapta într-o fereastră a
- * afișajului (fereastra este golită înainte; restul afișajului rămâne neatins).
- * @param number Valoarea numerică (-32768 până la 32767).
- * @param start_pos Prima poziție a ferestrei (0-7).
- * @param digits Numărul de cifre al ferestrei; dacă numărul are mai multe
- *               cifre, se păstrează cele mai semnificative.
- */
+// Afiseaza un numar cu semn, aliniat la dreapta in fereastra
+// start_pos .. start_pos + digits - 1 (golita inainte). Daca nu incape, se
+// pastreaza cifrele cele mai semnificative.
 void hmi_print_number(int16_t number, uint8_t start_pos, uint8_t digits);
-/**
- * Controlează bargraph-urile.
- * @param led_count Numărul de LED-uri de afișat.
- * @param is_red Setează 1 pentru bara Roșie, 0 pentru cea Verde.
- */
+// Aprinde led_count LED-uri pe bara rosie (is_red = 1) sau verde (0)
 void hmi_set_bargraph(uint8_t led_count, uint8_t is_red);
 
-/**
- * Citeste variabilele pentru evenimente de la tastara.
- * @return Codul ASCII pentru butonul apasat.
- */
+// Codul ASCII al butonului apasat, 0 daca niciunul
 unsigned char citeste_tastatura(void);
 
-//Macros:
-// 0-7 pentru pozitia digit point
-// trebuie scris dupa afisarea unui caracter la acea pozitie
+// Punctul zecimal la pozitia pos (0 .. DISP_BUF_SIZE - 1), dupa afisarea caracterului
 #define set_dp_pos(pos)         (dp_pos = (pos))
-#endif /* HMI_H */
+#endif /* HMI_H */

@@ -7,20 +7,17 @@
 #include "spi.h"
 #include "uart.h"
 #include "analog.h"
-// =============================================================================
-// CONFIGURATION BITS PENTRU PIC16F877A
-// =============================================================================
 
-// CONFIG
-#pragma config FOSC = HS        // Oscillator Selection bits (High Speed Crystal/Resonator necesar pentru 18.432 MHz)
-#pragma config WDTE = OFF       // Watchdog Timer Enable bit (WDT dezactivat pentru dezvoltare)
-#pragma config PWRTE = OFF       // Power-up Timer Enable bit (PWRT activat pentru stabilitate la pornire)
-#pragma config BOREN = OFF       // Brown-out Reset Enable bit (Resetare automată dacă scade tensiunea)
-#pragma config LVP = OFF        // Low-Voltage (Single-Supply) In-Circuit Serial Programming Enable bit (Dezactivat pentru a elibera pinul RB3)
-#pragma config CPD = OFF        // Data EEPROM Memory Code Protection bit (Protecție EEPROM oprită)
-#pragma config WRT = OFF        // Flash Program Memory Write Enable bits (Scrierea în Flash din cod dezactivată)
-#pragma config CP = OFF         // Flash Program Memory Code Protection bit (Protecție Flash oprită)
-#pragma config DEBUG = OFF      
+// Biti de configurare
+#pragma config FOSC = HS        // tipul oscilatorului: LP, XT, HS (cristal rapid), RC
+#pragma config WDTE = OFF       // watchdog timer: ON / OFF
+#pragma config PWRTE = OFF      // intarziere de ~72 ms la pornire: ON / OFF
+#pragma config BOREN = OFF      // reset la scaderea tensiunii de alimentare: ON / OFF
+#pragma config LVP = OFF        // programare la tensiune joasa: ON ocupa pinul RB3
+#pragma config CPD = OFF        // protectia la citire a EEPROM: ON / OFF
+#pragma config WRT = OFF        // scrierea memoriei Flash din program: OFF sau zone permise
+#pragma config CP = OFF         // protectia la citire a memoriei Flash: ON / OFF
+#pragma config DEBUG = OFF      // depanare in circuit: ON ocupa RB6 / RB7
 
 extern void uart_init(void);
 extern void buzzer_init(void);
@@ -30,10 +27,7 @@ extern void uart_init(void);
 extern void hmi_update(void);
 extern void uart_rx_isr(void);
 extern void uart_tx_isr(void);
-/**
- * Configures the microcontrollers peripherals, sets up Timer0 
- * for a 1ms periodic interrupt, and enables global interrupts.
- */
+// Initializeaza perifericele, Timer0 (tick-ul de 1 ms) si intreruperile
 void system_init(void);
 
 #endif	/* INIT_H */

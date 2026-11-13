@@ -5,65 +5,58 @@ GLOBAL _buzzer_get_note_value
 
 
 GLOBAL _temp_var    
-PSECT buzzer_data,global,class=BANK3,space=1,noexec
-; Variabila temporara refolosita (a nu se refolosi in intreruperi)
-_temp_var:    DS  1    
-    
-;===============================================================================
-; SECTIUNEA DE COD - Modul CCP1 in mod PWM + Timer2 pe 8 biti
-;===============================================================================
+; Variabila temporara (nu se foloseste in intreruperi)
+; definita in buzzer.c
+; Buzzer: CCP1 in mod PWM, perioada din Timer2
 
     
 PSECT buzzer, abs, ovrld,class = CODE, delta=2
 ORG 0x1F80
 _buzzer_init:
-    BSF     STATUS, STATUS_RP0_POSN     ; Selectam Banc 1
+    BSF     STATUS, STATUS_RP0_POSN     ; Banc 1
     BCF     STATUS, STATUS_RP1_POSN
-    BCF     TRISC, 2                    ; Setam RC2 (CCP1) ca IEȘIRE
-    MOVLW   0xB7			;Frecventa = 1568 Hz
-    MOVWF   PR2
-    BCF     STATUS, STATUS_RP0_POSN     ; Revenim in Banc 0
+    BCF     TRISC, 2                    ; RC2 = iesirea CCP1 (TRIS: 1 = intrare, 0 = iesire)
+    MOVLW   0xB7
+    MOVWF   PR2                         ; PR2: perioada PWM (Timer2 numara 0..PR2)
+    BCF     STATUS, STATUS_RP0_POSN     ; Banc 0
 
-    MOVLW   0x0C                        ; Setam modul PWM in CCP1CON
-    MOVWF   CCP1CON
+    MOVLW   0x0C
+    MOVWF   CCP1CON                     ; CCP1CON: CCP1M = modul (captura, comparare, PWM), DC1B = bitii de jos ai factorului de umplere
     
-    CLRF    CCPR1L                      ; Initializam cu Duty Cycle 0 (Mute)
+    CLRF    CCPR1L                      ; CCPR1L: bitii de sus ai factorului de umplere
     
-    MOVLW   0b00000110                  ; Timer2 ON, Prescaler 1:16
-    MOVWF   T2CON
+    MOVLW   0b00000110
+    MOVWF   T2CON                       ; T2CON: TMR2ON, prescaler (1, 4, 16), postscaler (1..16)
 
     RETURN
 
 _buzzer_on:
     BANKSEL CCP1CON
-    MOVLW   0x0C
+    MOVLW   0x0C                        ; CCP1CON<3:0> = CCP1M, modul CCP1
     IORWF   CCP1CON,F
     MOVWF   CCP1CON
     RETURN
 
 _buzzer_off:
     BANKSEL CCP1CON
-    MOVLW   0x30
+    MOVLW   0x30                        ; CCP1CON<3:0> = CCP1M (modul), <5:4> = DC1B
     ANDWF   CCP1CON,F
-    BCF     PORTC, 2                    ; Siguranță tranzistor OFF
+    BCF     PORTC, 2                    ; pinul la 0: tranzistorul blocat
     RETURN
 
 _buzzer_get_note_value:
     BANKSEL _temp_var			
-    MOVWF   BANKMASK(_temp_var)		; Salvam indexul
-    MOVLW   HIGH(_get_note_pr2)		; Pregatim saltul
+    MOVWF   BANKMASK(_temp_var)		; indexul notei
+    MOVLW   HIGH(_get_note_pr2)		; pagina tabelului
     MOVWF   PCLATH
-    MOVF    BANKMASK(_temp_var), W	; Citim indexul
+    MOVF    BANKMASK(_temp_var), W
     CALL    _get_note_pr2&0x7FF
     RETURN
 
-;-------------------------------------------------------------------------------
-; TABELA DE LOOKUP PENTRU REGISTRUL PR2 (8-biti) 
-; Calculata cu formula: PR2 = (288000 / Frecventa) - 1
-; Incepe de la RE6 (1175 Hz), limitata inferior de pragul de 1125 Hz al Timer2
-;-------------------------------------------------------------------------------
+; Tabelul PR2 al notelor: PR2 = Fosc / (4 x 16 x f) - 1 = 288000 / f - 1
+; (prescaler 1:16). PR2 <= 255, deci f >= ~1125 Hz.
 _get_note_pr2:
-    ADDWF   PCL, F                      ; Jump indexat
+    ADDWF   PCL, F                      ; salt indexat
     RETLW   0xF4                        ; 0:  RE6   (1175 Hz)
     RETLW   0xE6                        ; 1:  RE#6  (1245 Hz)
     RETLW   0xD9                        ; 2:  MI6   (1319 Hz)

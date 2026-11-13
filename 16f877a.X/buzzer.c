@@ -1,7 +1,9 @@
 #include <xc.h>
 #include "buzzer.h"
+// Folosita de buzzer_asm.s (nu in intreruperi)
+volatile __bank(3) uint8_t temp_var;
 
-unsigned char buzzer_volume_level = 5; // Default: Volum mediu (Treapta 5 din 10)
+unsigned char buzzer_volume_level = 5; // 0-10
 
 // Contoarele buzzerului de parcare (vezi buzzer.h); la pornire: oprit
 volatile unsigned char buzzer_on_time = 0;
@@ -11,24 +13,23 @@ void buzzer_setup(NoteMuzicale_t nota, unsigned char level_0_to_10) {
     if (level_0_to_10 > 10) level_0_to_10 = 10;
     if (nota >= NUM_NOTES) nota = (NoteMuzicale_t)(NUM_NOTES - 1);
     buzzer_volume_level = level_0_to_10;
-    PR2 = (uint8_t)(buzzer_get_note_value(nota));
+    PR2 = (uint8_t)(buzzer_get_note_value(nota)); // PR2: perioada PWM (Timer2 numara 0..PR2)
     buzzer_apply_volume();      // nu porneste si nu opreste sunetul
 }
 
 void buzzer_set_step_tone(unsigned char mult_50hz) {
     buzzer_off();
     if (mult_50hz < MIN_MULT_50HZ) {
-        mult_50hz = MIN_MULT_50HZ; // Limita de ~1150 Hz
+        mult_50hz = MIN_MULT_50HZ; // limita inferioara a frecventei
     }
-    
-    // Scriem direct în hardware calculul perioadei
+
     PR2 = (uint8_t)(((5760U + (mult_50hz >> 1)) / mult_50hz) - 1);
     buzzer_apply_volume();
     buzzer_on();
 }
 
 void buzzer_set_volume(unsigned char level_0_to_10) {
-    buzzer_off(); // Oprim sunetul curent înainte de a schimba volumul
+    buzzer_off();
     if (level_0_to_10 > 10) level_0_to_10 = 10;
     buzzer_volume_level = level_0_to_10;
     buzzer_play_note(RE6, 100);
@@ -37,53 +38,37 @@ void buzzer_set_volume(unsigned char level_0_to_10) {
 
 void buzzer_play_note(NoteMuzicale_t index_nota, unsigned int durata_ms) {
     if (index_nota >= NUM_NOTES || durata_ms == 0) return;
-    buzzer_off(); // Oprim sunetul curent înainte de a seta noua notă și durată
-    // 1. Setează nota muzicală în hardware (PWM)
-    PR2 = (uint8_t)(buzzer_get_note_value(index_nota)); 
+    buzzer_off();
+    PR2 = (uint8_t)(buzzer_get_note_value(index_nota));
     buzzer_apply_volume();
-    
-    // 2. Încarcă durata direct în contor
+
     di();
     buzzer_ms_ramase = durata_ms;
     ei();
-    // 3. Pornește sunetul
     buzzer_on();
 }
 void buzzer_apply_volume(void) {
-    // 1. Păstrăm perioada completă pe 8 biți (fără să pierdem rezoluție prin shiftare timpurie)
     unsigned int max_vol = PR2 + 1;
-    
+
     if (buzzer_volume_level == 0) {
-        // Secțiune critică: întreruperea de 1 ms schimbă biții de mod din CCP1CON
+        // Sectiune critica: intreruperea Timer0 schimba bitii de mod din CCP1CON
         di();
-        CCPR1L = 0;      // Primii 8 MSB se află în CCPR1L
-        CCP1CON &= 0xCF; // Stingem și cei 2 biți de jos (biții 5 și 4)
+        CCPR1L = 0;      // CCPR1L: cei 8 biti superiori ai factorului de umplere
+        CCP1CON &= 0xCF; // CCP1CON<5:4>: cei 2 biti inferiori ai factorului de umplere
         ei();
-    } 
+    }
     else {
-        // Valoarea maximă a duty-cycle-ului pe 10 biți este (PR2 + 1) * 4.
-        // Pentru un Duty Cycle maxim de 12.5% (adică 1/8), valoarea la volum maxim trebuie să fie:
-        // Target = ((PR2 + 1) * 4) / 8 = (PR2 + 1) / 2.
-        //
-        // Pentru a include și treptele de volum (1-10), formula ideală este:
-        // duty_10bit = (max_vol * buzzer_volume_level) / 20;
-        //
-        // Pentru a evita împărțirea lentă la 20, folosim trucul cu "constanta magică".
-        // 1 / 20 este exact 3276.8 / 65536. Rotunjim la 3277.
-        // 819ul -> 1/32
-        // 1638ul -> 1/16
-        // 3277ul -> 1/8 (posibil sa fie periculos, putere disipata dubla peste cea maxima)
+        // Factorul de umplere pe 10 biti: plin = (PR2 + 1) x 4.
+        // duty = (PR2 + 1) x nivel / 20, cu / 20 inlocuit de x 3277 >> 16.
+        // Constanta stabileste maximul: 819 -> 1/32, 1638 -> 1/16, 3277 -> 1/8
+        // (1/8 poate depasi puterea maxima a buzzerului).
         unsigned int duty_10bit = (unsigned int)(((unsigned long)max_vol * buzzer_volume_level * 3277ul) >> 16);
-        if(duty_10bit == 0) duty_10bit = 1; // Asigurăm un minim de volum pentru treapta 1
-        
-        // 2. Încărcăm cei 10 biți rezultați în registrele hardware ale PIC-ului
-        // Cei mai semnificativi 8 biți se duc în CCPR1L (shiftare la dreapta cu 2)
-        // Secțiune critică scurtă: CCP1CON este citit și rescris aici, iar
-        // întreruperea de 1 ms îi schimbă biții de mod (buzzer_on / buzzer_off).
+        if(duty_10bit == 0) duty_10bit = 1; // treapta 1 nu este niciodata 0%
+
+        // Sectiune critica: CCP1CON este citit si rescris, iar intreruperea
+        // Timer0 ii schimba bitii de mod (buzzer_on / buzzer_off)
         di();
         CCPR1L = (unsigned char)(duty_10bit >> 2);
-        
-        // Cei 2 biți rămași jos (biții 1 și 0 din duty_10bit) se pun în CCP1CON pe pozițiile 5 și 4
         CCP1CON = (uint8_t)((CCP1CON & 0xCF) | ((unsigned char)(duty_10bit & 0x03) << 4));
         ei();
     }

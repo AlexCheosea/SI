@@ -7,27 +7,33 @@
 
 #include <xc.h>
 #include "uart.h"
+// Date folosite de uart_asm.s. Controlul + TX in Bancul 2, RX in Bancul 3:
+// codul asm presupune bancurile (BANKSEL pe una, BANKMASK pe celelalte,
+// BCF RP1 pentru Bancul 2 -> 0).
+volatile __bank(2) uint8_t UART_RX_IDX;
+volatile __bank(2) uint8_t UART_RX_STATUS;
+volatile __bank(2) uint8_t UART_RX_LEN;
+volatile __bank(2) uint8_t UART_TX_IDX;
+volatile __bank(2) uint8_t UART_TX_LEN;
+volatile __bank(2) uint8_t UART_TX_STATUS;
+volatile __bank(2) uint8_t UART_TX_BUF[UART_BUF_SIZE];
+volatile __bank(3) uint8_t UART_RX_BUF[UART_BUF_SIZE];
 void uart_print_string(const char* str){
     uint8_t len = 0;
     char c;
 
-    while(UART_TX_STATUS == UART_TX_BUSY); //Așteptăm finalizarea ultimei transmisii
+    while(UART_TX_STATUS == UART_TX_BUSY); // asteapta linia anterioara
     if(UART_TX_STATUS == UART_TX_ERROR) {
-        // Resetăm starea de eroare
         UART_TX_STATUS = UART_TX_IDLE;
     }
-    // Transmisia este oprită în acest punct, deci întreruperea TX nu atinge
-    // bufferul: nu este nevoie de di()/ei(). Fiecare caracter este citit o
-    // singură dată, iar contorul este local (UART_TX_LEN este volatile).
+    // Transmisia este oprita aici, deci intreruperea TX nu atinge bufferul
     while((len < UART_BUF_SIZE - 1) && ((c = *str++) != '\0')){
         UART_TX_BUF[len++] = (unsigned char)c;
     }
 
-    // len indică prima poziție liberă din buffer (maxim 15): terminatorul
     UART_TX_BUF[len++] = RX_MSG_TERMINATOR;
 
-    // Lungimea totală transmisă, inclusiv terminatorul
-    UART_TX_LEN = len;
+    UART_TX_LEN = len; // inclusiv terminatorul
     uart_send();
     return;
 }
@@ -35,21 +41,16 @@ void uart_print_string(const char* str){
 uint8_t uart_read_string(char *out_buf) {
     uint8_t len;
 
-    /* uart_receive() returns UART_RX_LEN when status == RX_STATE_READY, else 0 */
     len = uart_receive();
     if (len == 0)
         return 0;
 
-    /* Error state: reset and bail */
     if (UART_RX_STATUS == UART_RX_ERROR) {
         uart_release();
         return 0;
     }
 
-    /*
-     * len includes the '\n' terminator written by the ASM driver.
-     * Copy everything except that last byte, then null-terminate for C.
-     */
+    // len include terminatorul '\n'; se copiaza fara el si se termina cu '\0'
     di();
     uint8_t data_len = (len > 0) ? (len - 1) : 0;
     if (data_len > UART_BUF_SIZE - 1)
@@ -61,7 +62,6 @@ uint8_t uart_read_string(char *out_buf) {
     out_buf[data_len] = '\0';
     ei();
 
-    /* Release the ASM driver so it can accept the next packet */
     uart_release();
 
     return data_len;

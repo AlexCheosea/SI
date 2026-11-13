@@ -2,31 +2,27 @@
 #define	SPI_H
 
 #include <xc.h>
-#define SPI_BUF_SIZE 3  // Dimensiunea bufferului de transfer SPI (în octeți)
+#define SPI_BUF_SIZE 3  // octeti pe pachet
 #define DIR_CW   1
 #define DIR_CCW  0
-// Bufferul fizic alocat in limbaj de asamblare (spi_asm.s, class=BANK3).
-// __bank(3) ii spune compilatorului bancul (necesita -maddrqual=require).
+// Bufferul este definit in spi_asm.s; __bank(n) trebuie sa corespunda cu
+// class=BANKn de acolo (necesita -maddrqual=require).
 extern volatile __bank(3) unsigned char spi_buf[SPI_BUF_SIZE];
 
-// Structura polimorfă de SPI_BUF_SIZE octeți, care poate fi interpretată în mai multe moduri
+// Pachetul SPI: octeti bruti pentru driverul ASM, comanda + valoare din C
 typedef union {
-// 1. Perspectiva Driverului ASM: un masiv brut de SPI_BUF_SIZE octeți
 volatile unsigned char raw[SPI_BUF_SIZE];
 
-// 2. Perspectiva din C
 struct {
-    unsigned char cmd;              // Primul octet este mereu comanda
-    int16_t val;    
+    unsigned char cmd;
+    int16_t val;
     };
 }PachetSPI_t;
 
-// Macro pentru acces instant
 #define SPI_PACKET  ((volatile PachetSPI_t*)spi_buf)
 
 void spi_init(void);
 void extern __far spi_transfer_packet(void);
-//Comenzi SPI
 typedef enum {
     CMD_SET_MOTOR_SPEED = 0x04,
     CMD_SET_MOTOR_DIR = 0x05
@@ -37,4 +33,4 @@ typedef enum {
 
 
 
-#endif	/* SPI_H */
+#endif	/* SPI_H */

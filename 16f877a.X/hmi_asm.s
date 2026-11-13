@@ -3,32 +3,14 @@ SEG_EN          EQU 7
 BAR_GRN         EQU 1
 BAR_RED         EQU 0
 
-;===============================================================================
-; SECTIUNEA DE DATE (RAM - MUTATĂ INTEGRAL ÎN BANK 3: 0x190 - 0x1EF)
-;===============================================================================
-PSECT udata_bank3,global,class=BANK3,space=1,noexec
+; Date in Bancul 3, definite in hmi.c
 
 GLOBAL _bar_red_low, _bar_red_high, _bar_grn_high, _bar_grn_low  
 GLOBAL _dp_pos
 GLOBAL _disp_buf
 GLOBAL _btn_i0event
-_seg_index:     DS 1 
-_disp_cnt:      DS 1 
-_bar_red_low:   DS 1 
-_bar_red_high:  DS 1
-_bar_grn_low:   DS 1      
-_bar_grn_high:  DS 1 
-_dp_pos:	    DS 1     ; Locatie digit point
-    
-_disp_buf:       DS 8   ; Buffer mutat în Bank 3
-_btn_i0state:    DS 1   
-_btn_i0prev:     DS 1   
-_btn_i0event:    DS 1   
-
-    
-;===============================================================================
-; DISPLAY DRIVER CODE
-;===============================================================================
+GLOBAL _seg_index, _disp_cnt, _btn_i0state, _btn_i0prev
+; Driverul afisajului, bargraph-urilor si butoanelor
 PSECT hmi_code,abs, ovrld, class=CODE, delta=2
 ORG 0x1D00
 
@@ -36,21 +18,20 @@ GLOBAL _hmi_init, _hmi_update
 
 
 _hmi_init: 
-    BANKSEL TRISD               ; Regiștrii TRIS sunt în Bank 1
+    BANKSEL TRISD               ; Banc 1; TRIS: 1 = intrare, 0 = iesire
     MOVLW   0x00                     
-    MOVWF   TRISD               ;PORT D iesire      
-    MOVWF   TRISB               ;PORT B iesire      
-    MOVWF   TRISE               ;PORT E iesire      
-    MOVLW   0b00000110          ;Toate porturile digitale      
-    MOVWF   ADCON1              ; ADCON1 este tot în Bank 1
-    MOVLW   0b00010000          ;RA4 input      
-    IORWF   TRISA, F		;RA4 input
-    BCF     TRISC, 0                  
+    MOVWF   TRISD               ; segmente / LED-uri
+    MOVWF   TRISB
+    MOVWF   TRISE               ; selectia cifrei
+    MOVLW   0b00000110
+    MOVWF   ADCON1              ; ADCON1: PCFG = ce pini AN sunt analogici (adc_init il rescrie)
+    MOVLW   0b00010000
+    IORWF   TRISA, F		; RA4 = intrarea butoanelor
+    BCF     TRISC, 0            ; activarea barelor
     BCF     TRISC, 1 
-    ;BANKSEL CMCON		;tot banc 1
     MOVLW   0x07
-    MOVWF   CMCON
-    ; Trecem în Bank 3 pentru inițializarea variabilelor din RAM
+    MOVWF   CMCON               ; CMCON: CM = configuratia comparatoarelor (inclusiv oprite)
+    ; Variabilele din Bancul 3
     BANKSEL _btn_i0state
     CLRF    BANKMASK(_btn_i0state)
     CLRF    BANKMASK(_btn_i0prev)
@@ -62,27 +43,27 @@ _hmi_init:
 display_segment:
     MOVLW   HIGH(font_table_low)
     MOVWF   PCLATH
-    BANKSEL PORTC               ; Porturile fizice sunt în Bank 0
+    BANKSEL PORTC               ; Banc 0
     BCF     PORTC, BAR_RED 
     BCF     PORTC, BAR_GRN            
     
-    BANKSEL _seg_index          ; Citim din Bank 3
+    BANKSEL _seg_index
     MOVF    BANKMASK(_seg_index), W         
-    CALL    font_table_low&0x7FF; Tabela ASCII->SEG                
+    CALL    font_table_low&0x7FF; ASCII -> segmente                
     
-    BANKSEL PORTD               ; Afișăm în Bank 0
+    BANKSEL PORTD
     MOVWF   PORTD
     
     MOVLW   HIGH(font_table_high)
     MOVWF   PCLATH
     
-    BANKSEL _seg_index          ; Citim din Bank 3
+    BANKSEL _seg_index
     MOVF    BANKMASK(_seg_index), W            
-    CALL    font_table_high&0x7FF; Tabela ASCII->SEG                
+    CALL    font_table_high&0x7FF; ASCII -> segmente                
     
-    BANKSEL PORTB               ; Afișăm în Bank 0
+    BANKSEL PORTB
     MOVWF   PORTB
-    ;Adauga digit point peste un carater arbitrar
+    ; Punctul zecimal pe cifra dp_pos
     BANKSEL _dp_pos
     MOVF    BANKMASK(_dp_pos), W
     XORWF   BANKMASK(_disp_cnt), W
@@ -92,26 +73,26 @@ display_segment:
     BCF     PORTB, 6
 dp_off:
 
-; Scanare butoane (Variabile în Bank 3, Porturi în Bank 0) ---------------------
-    BANKSEL _disp_cnt           ; Suntem în Bank 3
+; Butoane: in fiecare faza se citeste butonul ei pe RA4; event = apasari noi
+    BANKSEL _disp_cnt
     MOVLW   HIGH(mask_pressed)
     MOVWF   PCLATH
     MOVF    BANKMASK(_disp_cnt), W
     CALL    mask_pressed&0x7FF
     
-    BANKSEL PORTA               ; Mergem în Bank 0 să citim pinul fizic
+    BANKSEL PORTA
     BTFSS   PORTA, 4                
     GOTO    not_pressed_I0&0x7FF
 pressed_I0: 
-    BANKSEL _btn_i0state        ; Înapoi în Bank 3 pentru salvare date
+    BANKSEL _btn_i0state
     IORWF   BANKMASK(_btn_i0state), F          
     GOTO    event_I0&0x7FF
 not_pressed_I0:
-    BANKSEL _btn_i0state        ; Înapoi în Bank 3
+    BANKSEL _btn_i0state
     XORLW   0xFF                    
     ANDWF   BANKMASK(_btn_i0state), F          
 event_I0: 
-    ; Rămânem în Bank 3 (toate variabilele de mai jos sunt în aceeași bancă)
+    ; event |= state & ~prev
     COMF    BANKMASK(_btn_i0prev), W
     ANDWF   BANKMASK(_btn_i0state), W
     IORWF   BANKMASK(_btn_i0event), F          
@@ -132,41 +113,41 @@ mask_pressed:
     RETLW   0b10000000    ; 7
 
 display_bar_red:
-    BANKSEL PORTB               ; Pini (Bank 0)
+    BANKSEL PORTB
     BCF     PORTB, SEG_EN             
     BCF     PORTC, BAR_GRN          
     
-    BANKSEL _bar_red_low        ; Date (Bank 3)
+    BANKSEL _bar_red_low
     MOVF    BANKMASK(_bar_red_low), W          
-    BANKSEL PORTD               ; Pini (Bank 0)
+    BANKSEL PORTD
     MOVWF   PORTD 
     
-    BANKSEL _bar_red_high       ; Date (Bank 3)
+    BANKSEL _bar_red_high
     MOVF    BANKMASK(_bar_red_high), W         
-    BANKSEL PORTB               ; Pini (Bank 0)
+    BANKSEL PORTB
     MOVWF   PORTB 
     BSF     PORTC, BAR_RED          
     GOTO    display_end&0x7FF
 
 display_bar_green:
-    BANKSEL PORTB               ; Pini (Bank 0)
+    BANKSEL PORTB
     BCF     PORTB, SEG_EN            
     BCF     PORTC, BAR_RED          
     
-    BANKSEL _bar_grn_low        ; Date (Bank 3)
+    BANKSEL _bar_grn_low
     MOVF    BANKMASK(_bar_grn_low), W          
-    BANKSEL PORTD               ; Pini (Bank 0)
+    BANKSEL PORTD
     MOVWF   PORTD 
     
-    BANKSEL _bar_grn_high       ; Date (Bank 3)
+    BANKSEL _bar_grn_high
     MOVF    BANKMASK(_bar_grn_high), W         
-    BANKSEL PORTB               ; Pini (Bank 0)
+    BANKSEL PORTB
     MOVWF   PORTB 
     BSF     PORTC, BAR_GRN          
     GOTO    display_end&0x7FF
 
 _hmi_update:
-    BANKSEL _disp_cnt        ;Ne asiguram ca suntem in Bank 3   
+    BANKSEL _disp_cnt
     MOVF    BANKMASK(_disp_cnt), W
     XORLW   8
     BTFSC   STATUS, STATUS_Z_POSN
@@ -177,33 +158,28 @@ _hmi_update:
     BTFSC   STATUS, STATUS_Z_POSN
     GOTO    display_bar_red&0x7FF
 
-    ; cnt = 0..7
+    ; Faza 0..7: o cifra
     MOVF    BANKMASK(_disp_cnt), W
-    BANKSEL PORTE               ; PORTE este în Bank 0
-    BCF	    PORTB, SEG_EN	; Disable la display cand schimbam digit
+    BANKSEL PORTE
+    BCF	    PORTB, SEG_EN	; afisaj oprit cat se schimba cifra
     MOVWF   PORTE                                             
     
-    ; =========================================================================
-    ; ADRESARE INDIRECTĂ PENTRU PIC16F877A (BANK 3)
-    ; Deoarece _disp_buf este în Bank 3 (zona 0x180 - 0x1FF), pointerul hardware 
-    ; FSR (care are doar 8 biți) are nevoie de bitul IRP din STATUS setat pe 1.
-    ; =========================================================================
-    BSF     STATUS, STATUS_IRP_POSN   ; IRP = 1 -> INDF va accesa Bank 2 și Bank 3!
+    BSF     STATUS, STATUS_IRP_POSN   ; IRP = 1: INDF adreseaza Bancurile 2 si 3
     
-    BANKSEL _disp_cnt                 ; Trecem în Bank 3 ca să citim contorul
+    BANKSEL _disp_cnt
     MOVF    BANKMASK(_disp_cnt), W
-    ADDLW   LOW(_disp_buf)            ; Adunăm offset-ul la adresa de bază a buffer-ului
-    MOVWF   FSR                       ; Încărcăm pointerul în FSR
+    ADDLW   LOW(_disp_buf)            ; FSR = &disp_buf[faza]
+    MOVWF   FSR
 
-    MOVF    INDF, W                   ; Hardware-ul citește acum direct din Bank 3!
-    MOVWF   BANKMASK(_seg_index)      ; Salvăm în variabila din Bank 3
+    MOVF    INDF, W
+    MOVWF   BANKMASK(_seg_index)
     
-    BCF     STATUS, STATUS_IRP_POSN   ; Resetăm IRP = 0 (Opțional, dar recomandat ca bune practici)
+    BCF     STATUS, STATUS_IRP_POSN
     GOTO    display_segment&0x7FF
 
 display_end:  
-    BANKSEL _disp_cnt               ; Control contor în Bank 3
-    MOVF    BANKMASK(_disp_cnt), F  ;Plimbam _disp_cnt pentru a altera Z
+    BANKSEL _disp_cnt               ; faza urmatoare (circular)
+    MOVF    BANKMASK(_disp_cnt), F  ; test de zero
     BTFSC   STATUS, STATUS_Z_POSN   
     GOTO    reload_counter&0x7FF
     DECF    BANKMASK(_disp_cnt), F              
@@ -213,10 +189,8 @@ reload_counter:
     MOVWF   BANKMASK(_disp_cnt)
     RETURN
 
-;===============================================================================
-; TABELA PORTD - LOW Aliniata la pagina
-;===============================================================================
-PSECT font_low,abs,delta=2 ;plasam tabela in ultima pagina de memorie
+; Fonturile (PORTD / PORTB), indexate cu codul ASCII; fiecare tabel in pagina lui
+PSECT font_low,abs,delta=2
 ORG 0x1F00
 font_table_low:
     ADDWF PCL,F
@@ -316,9 +290,6 @@ ORG 0x1F21
     RETLW 0b01000000 ; PIPE
     RETLW 0b10001001 ; RBRACE
     RETLW 0b10000000 ; TILDE
-;===============================================================================
-; TABELA PORTB - HIGH Aliniata la pagina
-;===============================================================================
 PSECT font_high,abs,delta=2
 ORG 0x1E00
 font_table_high:
