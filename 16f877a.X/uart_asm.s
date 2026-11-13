@@ -4,6 +4,8 @@ RX_STATE_BUSY       EQU 1
 RX_STATE_READY      EQU 2
 RX_STATE_ERROR      EQU 3
 RX_MSG_TERMINATOR   EQU 10
+RX_DEL              EQU 0x7F         ; tasta Backspace
+RX_BS               EQU 0x08         ; Ctrl+H
 TX_MSG_TERMINATOR   EQU 10
 TX_STATE_IDLE       EQU 0
 TX_STATE_BUSY       EQU 1
@@ -85,9 +87,17 @@ _uart_rx_isr:
     MOVWF   INDF            
 
     ; Terminatorul incheie mesajul
-    XORLW   RX_MSG_TERMINATOR       
-    BTFSC   STATUS, STATUS_Z_POSN   
-    GOTO    uart_rx_handle_t&0x7FF  
+    XORLW   RX_MSG_TERMINATOR
+    BTFSC   STATUS, STATUS_Z_POSN
+    GOTO    uart_rx_handle_t&0x7FF
+
+    ; Backspace (DEL / BS); W = octet ^ valoarea testata anterior
+    XORLW   RX_MSG_TERMINATOR ^ RX_DEL
+    BTFSC   STATUS, STATUS_Z_POSN
+    GOTO    uart_rx_backspace&0x7FF
+    XORLW   RX_DEL ^ RX_BS
+    BTFSC   STATUS, STATUS_Z_POSN
+    GOTO    uart_rx_backspace&0x7FF
 
     ; Limita bufferului
     BANKSEL _UART_RX_IDX
@@ -209,5 +219,16 @@ uart_tx_msg_done:
 
     BANKSEL PIE1
     BCF     PIE1, PIE1_TXIE_POSN
+    RETURN
+
+; Backspace: sterge ultimul caracter. In spatiul liber de dupa hmi_code
+; (pagina 3), deci GOTO-ul din _uart_rx_isr ajunge aici.
+PSECT uart_bs_code,abs, ovrld, class=CODE, delta=2
+ORG 0x1DA0
+uart_rx_backspace:
+    BANKSEL _UART_RX_IDX
+    MOVF    BANKMASK(_UART_RX_IDX), F   ; Z = 1 daca nu exista caractere
+    BTFSS   STATUS, STATUS_Z_POSN
+    DECF    BANKMASK(_UART_RX_IDX), F
     RETURN
 END

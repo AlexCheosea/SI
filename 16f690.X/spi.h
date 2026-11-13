@@ -24,6 +24,7 @@ typedef union {
 typedef enum{
     CMD_SET_MOTOR_SPEED = 0x04,
     CMD_SET_MOTOR_DIR = 0x05,
+    CMD_SET_MOTOR_RAMP = 0x06,  // val: low = accelerare, high = franare
 } SPI_Commands_t;
 // Ultima comanda primita, scrisa in ISR
 volatile uint16_t spi_motor_speed;

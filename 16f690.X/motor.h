@@ -25,12 +25,15 @@
 #define MAX_SPS 5000
 // Rampa: pasi/s adaugati / scazuti la fiecare tick Timer2, deci acceleratia =
 // valoare / tick. Tick = Fosc / 4 / prescaler / (PR2 + 1) / postscaler (10 ms,
-// motor_init). Ambele > 0.
-#define MOTOR_SPD_INC 15U   // accelerare
-#define MOTOR_SPD_DEC 40U   // franare (si la schimbarea sensului)
+// motor_init). Setate prin SPI (CMD_SET_MOTOR_RAMP); ambele > 0.
+#define MOTOR_ACCEL_DEFAULT 15U   // accelerare
+#define MOTOR_DECEL_DEFAULT 40U   // franare (si la schimbarea sensului)
 
 extern volatile uint16_t motor_target_steps_per_second;
 extern volatile uint16_t motor_current_sps;
+// Scrise in ISR-ul SPI (un octet: citire atomica)
+extern volatile uint8_t motor_accel;
+extern volatile uint8_t motor_decel;
 
 #define motor_off() (MOTOR_PORT &= 0xC0) // bobine oprite (nefolosit)
 #define motor_on()  (MOTOR_PORT |= 0x30) // bobine alimentate, motorul tine pozitia (nefolosit)

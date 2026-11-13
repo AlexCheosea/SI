@@ -25,7 +25,8 @@ void spi_init(void);
 void extern __far spi_transfer_packet(void);
 typedef enum {
     CMD_SET_MOTOR_SPEED = 0x04,
-    CMD_SET_MOTOR_DIR = 0x05
+    CMD_SET_MOTOR_DIR = 0x05,
+    CMD_SET_MOTOR_RAMP = 0x06   // val: low = accelerare, high = franare
 } SPI_Commands_t;
 
 

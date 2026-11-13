@@ -16,6 +16,7 @@
 extern volatile __bank(3) uint8_t UART_RX_BUF[UART_RX_BUF_SIZE];
 extern volatile __bank(2) uint8_t UART_TX_BUF[UART_TX_BUF_SIZE];
 extern volatile __bank(2) uint8_t UART_RX_LEN;    // lungimea mesajului primit
+extern volatile __bank(2) uint8_t UART_RX_IDX;    // caractere primite din linia in curs
 extern volatile __bank(2) uint8_t UART_TX_LEN;    // de scris inainte de uart_send()
 extern volatile __bank(2) uint8_t UART_TX_STATUS;
 extern volatile __bank(2) uint8_t UART_RX_STATUS;

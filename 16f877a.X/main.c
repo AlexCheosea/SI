@@ -15,6 +15,13 @@
 
 #define IS_DIGIT(c) ((c) >= '0' && (c) <= '9')
 
+// Rampa (in sclav): pasi/s pe tick de 10 ms; 1 unitate = 30 RPM/s.
+// Implicitele = cele din 16f690.X/motor.h.
+#define RAMP_MIN           5U
+#define RAMP_MAX           250U
+#define RAMP_ACCEL_DEFAULT 15U
+#define RAMP_DECEL_DEFAULT 40U
+
 static uint16_t cruise_speed = 0;        // viteza ceruta de utilizator (pasi/s)
 static uint16_t effective_speed = 0;     // viteza trimisa sclavului
 static uint16_t actual_speed = 0;        // viteza raportata de sclav
@@ -27,6 +34,53 @@ static __bit cruise_speed_changed;       // setat la orice modificare a cruise_s
 static uint8_t buzzer_volume = BUZZER_VOLUME;   // 0-10
 static uint8_t buzzer_tone = BUZZER_TONE;       // index in NoteMuzicale_t (0 .. NUM_NOTES-1)
 static __bit buzzer_settings_changed;    // volum / nota de aplicat in bucla principala
+static uint8_t motor_accel = RAMP_ACCEL_DEFAULT;   // RAMP_MIN .. RAMP_MAX
+static uint8_t motor_decel = RAMP_DECEL_DEFAULT;   // RAMP_MIN .. RAMP_MAX
+static __bit ramp_changed;               // rampa de trimis sclavului
+
+// ===========================================================================
+// Setari in EEPROM (volum, nota, rampa): salvate la schimbare, aplicate la
+// pornire. Valorile in afara limitelor raman implicite.
+// ===========================================================================
+#define EE_ADDR_SETTINGS 0x00U
+enum { EE_VOLUME, EE_TONE, EE_ACCEL, EE_DECEL, EE_COUNT };
+static uint8_t *const settings[EE_COUNT] = {
+    &buzzer_volume, &buzzer_tone, &motor_accel, &motor_decel
+};
+static uint8_t ee_saved[EE_COUNT];      // copia EEPROM-ului
+
+static void settings_load(void) {
+    static const uint8_t limit_lo[EE_COUNT] = {0, 0, RAMP_MIN, RAMP_MIN};
+    static const uint8_t limit_hi[EE_COUNT] = {
+        10, NUM_NOTES - 1U, RAMP_MAX, RAMP_MAX   // volum 0-10, nota = index
+    };
+    uint8_t i;
+    uint8_t value;
+
+    for (i = 0; i < EE_COUNT; i++) {
+        value = eeprom_read((uint8_t)(EE_ADDR_SETTINGS + i));
+        ee_saved[i] = value;
+        if (value >= limit_lo[i] && value <= limit_hi[i]) {
+            *settings[i] = value;
+        }
+    }
+}
+
+// Un octet pe trecere, doar cu EEPROM-ul liber: nu blocheaza bucla
+static void settings_save_task(void) {
+    uint8_t i;
+
+    if (EECON1bits.WR) {
+        return;
+    }
+    for (i = 0; i < EE_COUNT; i++) {
+        if (*settings[i] != ee_saved[i]) {
+            ee_saved[i] = *settings[i];
+            EEPROM_WRITE((uint8_t)(EE_ADDR_SETTINGS + i), ee_saved[i]);
+            return;
+        }
+    }
+}
 
 // ===========================================================================
 // Conversii de viteza
@@ -50,6 +104,13 @@ static int16_t send_motor_command(SPI_Commands_t command, int16_t value) {
     spi_transfer_packet();
     return SPI_PACKET->val;
 }
+
+// Accelerarea in octetul low, franarea in cel high
+static void send_motor_ramp(void) {
+    send_motor_command(CMD_SET_MOTOR_RAMP,
+                       (int16_t)(((uint16_t)motor_decel << 8) | motor_accel));
+}
+
 
 // ===========================================================================
 // Afisaj si bargraph (HMI)
@@ -242,13 +303,14 @@ static void update_motor_voltage_status(void) {
 }
 
 // ===========================================================================
-// Terminal (UART + coduri ANSI), minim 28 de randuri, set de caractere CP437.
+// Terminal (UART + coduri ANSI), minim 31 de randuri, set de caractere CP437.
 // Un chenar dublu, pe sectiuni:
-//    1  STATUS     2-6   starea (rescrisa pe loc; randul 4 = antet fix)
-//    7  SENSORS    8-11  senzorii
-//   12  MENU      13-18  meniul (fix)
-//   19  HISTORY   20-27  istoricul (regiune de derulare)
-//   28  marginea de jos
+//    1  STATUS     2-7   starea (rescrisa pe loc; randul 4 = antet fix)
+//    8  SENSORS    9-12  senzorii
+//   13  MENU      14-21  meniul (fix)
+//   22  HISTORY   23-29  istoricul (regiune de derulare)
+//                 30     linia de comanda: "> <ce se tasteaza>_"
+//   31  marginea de jos
 // Fiecare linie se formateaza direct in UART_TX_BUF, doar cand nu se transmite
 // nimic, si incepe cu pozitionarea cursorului (ESC[<rand>H): liniile sunt
 // independente, deci raportul si istoricul se pot intercala.
@@ -273,16 +335,18 @@ static void update_motor_voltage_status(void) {
 #define ROW_RPM_HDR    4U
 #define ROW_RPM        5U
 #define ROW_VMOT       6U
-#define ROW_SENS_HDR   7U
-#define ROW_SENS       8U               // SENSOR_COUNT randuri
-#define ROW_MENU_HDR   12U
-#define ROW_MENU       13U              // MENU_ROWS randuri
-#define ROW_HIST_HDR   19U
-#define ROW_HIST_TOP   20U
-#define ROW_HIST_BOT   27U
-#define ROW_BOTTOM     28U
+#define ROW_RAMP       7U
+#define ROW_SENS_HDR   8U
+#define ROW_SENS       9U               // SENSOR_COUNT randuri
+#define ROW_MENU_HDR   13U
+#define ROW_MENU       14U              // MENU_ROWS randuri
+#define ROW_HIST_HDR   22U
+#define ROW_HIST_TOP   23U
+#define ROW_HIST_BOT   29U
+#define ROW_INPUT      30U              // in afara regiunii de derulare
+#define ROW_BOTTOM     31U
 
-#define MENU_ROWS 6U
+#define MENU_ROWS 8U
 #define HIST_ROWS (ROW_HIST_BOT - ROW_HIST_TOP + 1U)
 
 // Liniile unui raport, in ordinea trimiterii: cele fixe doar la redesenare,
@@ -297,21 +361,23 @@ enum {
     TL_HIST_HDR = TL_MENU + MENU_ROWS,
     TL_HIST,                            // HIST_ROWS randuri goale
     TL_BOTTOM = TL_HIST + HIST_ROWS,
-    TL_REGION,                          // ESC[20;27r
+    TL_REGION,                          // ESC[23;29r
     TL_STATUS,
     TL_DIR = TL_STATUS,
     TL_PATH,
     TL_RPM,
     TL_VMOT,
+    TL_RAMP,
     TL_SENS,                            // SENSOR_COUNT linii
-    TL_END = TL_SENS + SENSOR_COUNT
+    TL_INPUT = TL_SENS + SENSOR_COUNT,  // linia de comanda
+    TL_END
 };
 #define TL_IDLE 0xFFU                   // niciun raport in curs
 
-// Secventa ESC[20;27r din TL_REGION este scrisa ca text: eroare de compilare
+// Secventa ESC[23;29r din TL_REGION este scrisa ca text: eroare de compilare
 // daca randurile istoricului se schimba
 typedef char hist_region_matches_rows[
-    (ROW_HIST_TOP == 20U && ROW_HIST_BOT == 27U) ? 1 : -1];
+    (ROW_HIST_TOP == 23U && ROW_HIST_BOT == 29U) ? 1 : -1];
 
 // Stiva hardware are 8 niveluri, iar intreruperea foloseste 3 (intrarea,
 // hmi_update, CALL-ul in tabelul de fonturi din hmi_asm.s). Calea de
@@ -412,15 +478,16 @@ static void tx_row_end(char fill, char right) {
 
 // Liniile fixe (doar la redesenare)
 static void term_format_static(uint8_t line) {
+    // Limite verificate de menu_ranges_match
     static const char *const menu[MENU_ROWS] = {
-        "0 stop 1 max 2 reverse",       // 2 sub 4/6/8/10; 1 la mijloc intre ele
-        // '|' pe coloana din mijloc a chenarului (a 13-a din BOX_W = 25);
-        // fiecare coloana incepe la un spatiu de peretele ei (ca restul randurilor)
-        "3 + 10RPM  | 4 - 10RPM",
-        "5 +100RPM  | 6 -100RPM",
-        "7 + Volume | 8 - Volume",
-        "9 + Tone   | 10 - Tone",
-        "Enter = redraw"
+        "rpm speed      0..1500",
+        "inc accel      5..250",
+        "dec decel      5..250",
+        "vol volume     0..10",
+        "ton tone       1..25",
+        "rev reverse",
+        "N set   +N / -N add/sub",
+        "empty line = redraw"
     };
     uint8_t row;
     char left = BOX_ML;
@@ -428,15 +495,16 @@ static void term_format_static(uint8_t line) {
     const char *title;
 
     if (line == TL_CLEAR) {
-        // ESC[r = fara regiune de derulare, ESC[2J = sterge ecranul
+        // ESC[r = fara regiune de derulare, ESC[2J = sterge ecranul,
+        // ESC[?25l = ascunde cursorul
         tx_len = 0;
-        tx_str("\x1b[r\x1b[2J");
+        tx_str("\x1b[r\x1b[2J\x1b[?25l");
         return;
     }
     if (line == TL_REGION) {
         // Regiune de derulare doar pentru istoric (ROW_HIST_TOP;ROW_HIST_BOT)
         tx_len = 0;
-        tx_str("\x1b[20;27r");
+        tx_str("\x1b[23;29r");
         return;
     }
     if (line == TL_RPM_HDR) {
@@ -569,6 +637,15 @@ static void term_format_status(uint8_t line) {
             }
             break;
 
+        case TL_RAMP:
+            // "ACCEL  15  DECEL  40": valorile brute (x30 RPM/s)
+            tx_text_row(ROW_RAMP);
+            tx_str("ACCEL");
+            tx_uint(motor_accel, 4);
+            tx_str("  DECEL");
+            tx_uint(motor_decel, 4);
+            break;
+
         default:
             // "S0F ADC 1023  12.25 cm": valoarea ADC filtrata si distanta
             channel = (uint8_t)(line - TL_SENS);
@@ -583,6 +660,47 @@ static void term_format_status(uint8_t line) {
             break;
     }
     tx_row_end(' ', BOX_V);
+}
+
+// Linia de comanda "> text_": redesenata la schimbarea UART_RX_IDX si in
+// fiecare raport (TL_INPUT).
+static uint8_t input_shown_len = 0xFF;  // UART_RX_IDX la ultima desenare
+
+// len caractere din UART_RX_BUF; neafisabilele apar ca '.'
+static void tx_rx_text(uint8_t len) {
+    uint8_t i;
+    uint8_t c;
+
+    for (i = 0; i < len; i++) {
+        c = UART_RX_BUF[i];
+        tx_char((c < 0x20U || c >= 0x7FU) ? '.' : (char)c);
+    }
+}
+
+// Doar de pe nivelul 2 (limita de stiva)
+static void term_format_input(void) {
+    uint8_t len = UART_RX_IDX;          // citit o data (ISR)
+
+    // Dupa Enter indexul e 0: linia se goleste
+    if (len > UART_RX_BUF_SIZE - 1U) {
+        len = UART_RX_BUF_SIZE - 1U;
+    }
+    input_shown_len = len;
+    tx_row_begin(ROW_INPUT, BOX_V);
+    tx_char('>');
+    tx_char(' ');
+    tx_rx_text(len);
+    tx_char('_');
+    tx_row_end(' ', BOX_V);
+}
+
+// Ecoul tastarii, la schimbarea UART_RX_IDX
+static void uart_print_input(void) {
+    if (UART_TX_STATUS == UART_TX_BUSY || UART_RX_IDX == input_shown_len) {
+        return;
+    }
+    term_format_input();
+    tx_send();
 }
 
 // Raportul de stare, o linie pe apel, ca bucla principala sa nu astepte:
@@ -608,23 +726,49 @@ static void uart_print_status(void) {
 
     if (line < TL_STATUS) {
         term_format_static(line);
+    } else if (line == TL_INPUT) {
+        term_format_input();
     } else {
         term_format_status(line);
     }
     tx_send();
 }
 
-// Comanda UART: numarul din meniu, pe o linie terminata cu '\n' (tio: --map OCRNL).
-// Linie goala = redesenare. Fiecare comanda apare in istoric ca "<comanda> <actiune>".
+// Comenzi: <mnemonica>[ ][+|-]<numar> (rev fara numar). Fara semn = setare,
+// cu semn = adunare / scadere; rezultatul e limitat.
+enum { UC_RPM, UC_INC, UC_DEC, UC_VOL, UC_TON, UC_REV, UC_COUNT };
+#define UC_SET 0U
+#define UC_ADD 1U
+#define UC_SUB 2U
+#define HIST_TEXT_W 10U         // latimea textului in istoric
+
+// Limitele din meniu
+typedef char menu_ranges_match[
+    (MAX_CRUISE_RPM == 1500U && RAMP_MIN == 5U && RAMP_MAX == 250U &&
+     NUM_NOTES == 25U) ? 1 : -1];
+
+// Linia terminata cu '\n' (tio: --map OCRNL); linie goala = redesenare.
+// Istoric: "<text> = <rezultat>" sau "<text>?".
 // Linia din istoric se formateaza in UART_TX_BUF: cat timp se transmite,
 // comanda asteapta in UART_RX_BUF pana la o trecere urmatoare.
 static void uart_handle_command(void) {
-    static const uint16_t menu_steps[2] = {10, 100};          // comenzile 3-6
+    static const char mnemonics[UC_COUNT][3] = {
+        {'r', 'p', 'm'}, {'i', 'n', 'c'}, {'d', 'e', 'c'},
+        {'v', 'o', 'l'}, {'t', 'o', 'n'}, {'r', 'e', 'v'}
+    };
+    static const uint16_t limit_min[UC_REV] = {
+        0, RAMP_MIN, RAMP_MIN, 0, 1
+    };
+    static const uint16_t limit_max[UC_REV] = {
+        MAX_CRUISE_RPM, RAMP_MAX, RAMP_MAX, 10, NUM_NOTES
+    };
     uint8_t len;
-    uint8_t number = 0xFF;      // numarul din meniu; 0xFF = comanda invalida
-    uint8_t increase = 0;
-    uint16_t delta = 0;         // pasul in RPM; 0 = nu e comanda de viteza
-    const char *action = "?";
+    uint8_t cmd;
+    uint8_t pos;
+    uint8_t mode = UC_SET;
+    uint8_t valid = 0;
+    uint16_t value = 0;
+    uint16_t current = 0;
 
     if (uart_receive() == 0U) {
         return;                 // nicio linie completa
@@ -650,81 +794,114 @@ static void uart_handle_command(void) {
         return;
     }
 
-    // Comenzile valide au cel mult doua cifre
-    if (len <= 2U && IS_DIGIT(UART_RX_BUF[0]) &&
-        (len == 1U || IS_DIGIT(UART_RX_BUF[1]))) {
-        number = (uint8_t)(UART_RX_BUF[0] - '0');
-        if (len == 2U) {
-            number = (uint8_t)(number * 10U +
-                               (uint8_t)(UART_RX_BUF[1] - '0'));
+    // Mnemonica (| 0x20 = litera mica)
+    for (cmd = 0; cmd < UC_COUNT; cmd++) {
+        if (len >= 3U &&
+            (UART_RX_BUF[0] | 0x20U) == (uint8_t)mnemonics[cmd][0] &&
+            (UART_RX_BUF[1] | 0x20U) == (uint8_t)mnemonics[cmd][1] &&
+            (UART_RX_BUF[2] | 0x20U) == (uint8_t)mnemonics[cmd][2]) {
+            break;
         }
     }
 
-    switch (number) {
-        case 0:
-            cruise_speed = 0;
-            cruise_speed_changed = 1;
-            action = "STOP";
-            break;
-        case 1:
-            cruise_speed = MAX_CRUISE_SPEED;
-            cruise_speed_changed = 1;
-            action = "MAX";
-            break;
-        case 2:
-            set_motor_direction((motor_direction == DIR_CW) ? DIR_CCW : DIR_CW);
-            action = (motor_direction == DIR_CW) ? "FWD" : "BACK";
-            break;
-        case 3: case 4: case 5: case 6: {
-            // Pas de viteza in RPM (impar = +, par = -), limitat la 0..MAX
-            uint16_t rpm = sps_to_rpm(cruise_speed);
-
-            delta = menu_steps[(number - 3U) / 2U];
-            increase = (uint8_t)((number & 1U) != 0U);
-            if (increase) {
-                rpm = (delta >= MAX_CRUISE_RPM - rpm) ? MAX_CRUISE_RPM
-                                                      : rpm + delta;
-            } else {
-                rpm = (rpm > delta) ? rpm - delta : 0;
-            }
-            cruise_speed = rpm_to_sps(rpm);
-            cruise_speed_changed = 1;
-            break;
+    if (cmd == UC_REV) {
+        valid = (uint8_t)(len == 3U);
+    } else if (cmd < UC_COUNT) {
+        pos = 3;
+        if (pos < len && UART_RX_BUF[pos] == ' ') {
+            pos++;
         }
-        case 7: case 8:
-            change_buzzer_volume((uint8_t)(number == 7U));
-            action = (number == 7U) ? "VOL+" : "VOL-";
-            break;
-        case 9: case 10:
-            change_buzzer_tone((uint8_t)(number == 9U));
-            action = (number == 9U) ? "TONE+" : "TONE-";
-            break;
-        default:
-            break;              // necunoscuta: in istoric apare "<text> ?"
+        if (pos < len && UART_RX_BUF[pos] == '+') {
+            mode = UC_ADD;
+            pos++;
+        } else if (pos < len && UART_RX_BUF[pos] == '-') {
+            mode = UC_SUB;
+            pos++;
+        }
+        // Cel putin o cifra; peste 9999 ramane 9999 (oricum limitat)
+        valid = (uint8_t)(pos < len);
+        while (pos < len && IS_DIGIT(UART_RX_BUF[pos])) {
+            value = (value < 1000U)
+                ? (uint16_t)(value * 10U + (uint8_t)(UART_RX_BUF[pos] - '0'))
+                : 9999U;
+            pos++;
+        }
+        if (pos != len) {
+            valid = 0;
+        }
+    }
+
+    if (valid) {
+        if (cmd == UC_REV) {
+            set_motor_direction((motor_direction == DIR_CW) ? DIR_CCW : DIR_CW);
+        } else {
+            uint16_t lo = limit_min[cmd];
+            uint16_t hi = limit_max[cmd];
+
+            switch (cmd) {
+                case UC_RPM: current = sps_to_rpm(cruise_speed); break;
+                case UC_INC: current = motor_accel;              break;
+                case UC_DEC: current = motor_decel;              break;
+                case UC_VOL: current = buzzer_volume;            break;
+                default:     current = buzzer_tone + 1U;         break; // UC_TON
+            }
+            // current e in [lo, hi]: fara depasiri
+            if (mode == UC_ADD) {
+                current = (value >= hi - current) ? hi : current + value;
+            } else if (mode == UC_SUB) {
+                current = (value >= current - lo) ? lo : current - value;
+            } else {
+                current = (value < lo) ? lo : ((value > hi) ? hi : value);
+            }
+            switch (cmd) {
+                case UC_RPM:
+                    cruise_speed = rpm_to_sps(current);
+                    cruise_speed_changed = 1;
+                    break;
+                case UC_INC:
+                    motor_accel = (uint8_t)current;
+                    ramp_changed = 1;
+                    break;
+                case UC_DEC:
+                    motor_decel = (uint8_t)current;
+                    ramp_changed = 1;
+                    break;
+                case UC_VOL:
+                    buzzer_volume = (uint8_t)current;
+                    buzzer_settings_changed = 1;
+                    break;
+                default:        // UC_TON
+                    buzzer_tone = (uint8_t)(current - 1U);
+                    buzzer_settings_changed = 1;
+                    break;
+            }
+        }
     }
 
     // Linia din istoric, pe ultimul rand al regiunii: '\n' deruleaza intai
     // regiunea, apoi randul nou se scrie cu margini (ESC[<col>G = marginea
-    // dreapta, fara spatii de completare). UART_RX_BUF doar prin index.
+    // dreapta, fara spatii de completare). Maxim 30 de octeti.
     tx_len = 0;
     tx_csi(ROW_HIST_BOT, 'H');
     tx_char('\n');
     tx_char(BOX_V);
     tx_char(' ');
-    if (number == 0xFF) {
+    if (!valid) {
+        tx_rx_text(len);                        // maxim 15 caractere
         tx_char('?');
     } else {
-        tx_char((char)UART_RX_BUF[0]);          // cel mult doua cifre
-        if (len > 1U) {
-            tx_char((char)UART_RX_BUF[1]);
+        if (len > HIST_TEXT_W) {
+            len = HIST_TEXT_W;
         }
-        tx_char(' ');
-        if (delta != 0U) {
-            tx_char(increase ? '+' : '-');
-            tx_uint(delta, 1);
-            tx_str("RPM");
+        tx_rx_text(len);
+        for (pos = len; pos < HIST_TEXT_W; pos++) {
+            tx_char(' ');
+        }
+        tx_str("= ");
+        if (cmd == UC_REV) {
+            tx_str((motor_direction == DIR_CW) ? "FWD" : "BACK");
         } else {
-            tx_str(action);
+            tx_uint(current, 1);
         }
     }
     tx_csi(BOX_RIGHT_COL, 'G');
@@ -747,12 +924,15 @@ void main(void) {
     path_slow = 0;
     cruise_speed_changed = 1;          // panta se calculeaza la prima folosire
     buzzer_settings_changed = 0;
+    settings_load();                   // inainte de buzzer_setup si send_motor_ramp
     system_init();
     buzzer_off();                      // buzzer_init lasa PWM-ul pornit
     buzzer_setup((NoteMuzicale_t)buzzer_tone, buzzer_volume);
     actual_speed = (uint16_t)send_motor_command(
         CMD_SET_MOTOR_SPEED, (int16_t)cruise_speed);
     send_motor_command(CMD_SET_MOTOR_DIR, (int16_t)motor_direction);
+    send_motor_ramp();
+    ramp_changed = 0;
     display_speed(actual_speed);
     display_direction_sensors();
 
@@ -768,6 +948,7 @@ void main(void) {
             buzzer_settings_changed = 0;
             buzzer_setup((NoteMuzicale_t)buzzer_tone, buzzer_volume);
         }
+        settings_save_task();
 
         // Butoanele: viteza -/+, sensul, volumul si nota bip-ului
         switch (citeste_tastatura()) {
@@ -808,6 +989,13 @@ void main(void) {
         }
 
         uart_handle_command();
+        uart_print_input();             // ecoul tastarii, inaintea raportului
+
+        // Rampa se trimite doar la schimbare (si o data la pornire)
+        if (ramp_changed) {
+            ramp_changed = 0;
+            send_motor_ramp();
+        }
 
         // Viteza se trimite la schimbare si periodic; raspunsul = viteza curenta
         effective_speed = calculate_effective_speed();

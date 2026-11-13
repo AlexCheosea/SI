@@ -82,6 +82,15 @@ void spi_isr(void) {
             spi_motor_dir = (uint8_t)rx_packet.val;
             spi_motor_updated = 1;
         }
+        else if (rx_packet.cmd == CMD_SET_MOTOR_RAMP) {
+            // 0 ar bloca rampa; limitele le impune master-ul
+            if (rx_packet.raw[1] != 0U) {
+                motor_accel = rx_packet.raw[1];
+            }
+            if (rx_packet.raw[2] != 0U) {
+                motor_decel = rx_packet.raw[2];
+            }
+        }
     }
     spi_index = idx;
 }

@@ -20,6 +20,8 @@ static volatile uint16_t ccp1_period = 0xFFFF;
 static volatile uint8_t motor_running = 0;
 volatile uint16_t motor_target_steps_per_second = 0;
 volatile uint16_t motor_current_sps = 0;
+volatile uint8_t motor_accel = MOTOR_ACCEL_DEFAULT;
+volatile uint8_t motor_decel = MOTOR_DECEL_DEFAULT;
 static volatile uint8_t motor_target_direction = DIR_CW;
 static uint8_t timer2_interrupt_count = 0;
 
@@ -141,17 +143,19 @@ void motor_ramp_task(void) {
 
     uint16_t next_sps;
     if (motor_current_sps < target_sps) {
-        // Accelerare
+        // Accelerare (pas citit o data: il scrie ISR-ul SPI)
+        uint8_t accel = motor_accel;
         uint16_t difference = target_sps - motor_current_sps;
-        next_sps = difference <= MOTOR_SPD_INC
+        next_sps = difference <= accel
             ? target_sps
-            : motor_current_sps + MOTOR_SPD_INC;
+            : motor_current_sps + accel;
     } else {
         // Franare
+        uint8_t decel = motor_decel;
         uint16_t difference = motor_current_sps - target_sps;
-        next_sps = difference <= MOTOR_SPD_DEC
+        next_sps = difference <= decel
             ? target_sps
-            : motor_current_sps - MOTOR_SPD_DEC;
+            : motor_current_sps - decel;
     }
 
     motor_set_speed(next_sps, motor_dir);
