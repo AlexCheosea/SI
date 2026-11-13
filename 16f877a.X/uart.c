@@ -16,8 +16,8 @@ volatile __bank(2) uint8_t UART_RX_LEN;
 volatile __bank(2) uint8_t UART_TX_IDX;
 volatile __bank(2) uint8_t UART_TX_LEN;
 volatile __bank(2) uint8_t UART_TX_STATUS;
-volatile __bank(2) uint8_t UART_TX_BUF[UART_BUF_SIZE];
-volatile __bank(3) uint8_t UART_RX_BUF[UART_BUF_SIZE];
+volatile __bank(2) uint8_t UART_TX_BUF[UART_TX_BUF_SIZE];
+volatile __bank(3) uint8_t UART_RX_BUF[UART_RX_BUF_SIZE];
 void uart_print_string(const char* str){
     uint8_t len = 0;
     char c;
@@ -27,7 +27,7 @@ void uart_print_string(const char* str){
         UART_TX_STATUS = UART_TX_IDLE;
     }
     // Transmisia este oprita aici, deci intreruperea TX nu atinge bufferul
-    while((len < UART_BUF_SIZE - 1) && ((c = *str++) != '\0')){
+    while((len < UART_TX_BUF_SIZE - 1) && ((c = *str++) != '\0')){
         UART_TX_BUF[len++] = (unsigned char)c;
     }
 
@@ -53,8 +53,8 @@ uint8_t uart_read_string(char *out_buf) {
     // len include terminatorul '\n'; se copiaza fara el si se termina cu '\0'
     di();
     uint8_t data_len = (len > 0) ? (len - 1) : 0;
-    if (data_len > UART_BUF_SIZE - 1)
-        data_len = UART_BUF_SIZE - 1;
+    if (data_len > UART_RX_BUF_SIZE - 1)
+        data_len = UART_RX_BUF_SIZE - 1;
 
     for (uint8_t i = 0; i < data_len; i++)
         out_buf[i] = (char)UART_RX_BUF[i];

@@ -8,8 +8,8 @@ TX_MSG_TERMINATOR   EQU 10
 TX_STATE_IDLE       EQU 0
 TX_STATE_BUSY       EQU 1
 TX_STATE_ERROR      EQU 3
-RX_BUF_SIZE	    EQU 16
-TX_BUF_SIZE	    EQU 16
+RX_BUF_SIZE	    EQU 16           ; UART_RX_BUF_SIZE din uart.h
+TX_BUF_SIZE	    EQU 32           ; UART_TX_BUF_SIZE din uart.h
 ; Date: control + TX in Bancul 2, RX in Bancul 3
 GLOBAL _UART_RX_BUF, _UART_RX_LEN, _UART_RX_STATUS
 GLOBAL _UART_TX_BUF, _UART_TX_LEN, _UART_TX_STATUS
@@ -52,9 +52,7 @@ _uart_init:
 
     ; Intreruperi (TXIE se activeaza in uart_send)
     BSF     PIE1, PIE1_RCIE_POSN     
-    BSF     INTCON, INTCON_PEIE_POSN 
-    
-    BCF     STATUS, STATUS_RP0_POSN  
+    BSF     INTCON, INTCON_PEIE_POSN
     RETURN
 
 ; ISR receptie
@@ -123,28 +121,24 @@ uart_rx_discard:
     MOVF    RCREG, W                
     RETURN
 
-uart_rx_overrun_err:
-    BANKSEL _UART_RX_IDX
-    CLRF    BANKMASK(_UART_RX_IDX)    
-    BANKSEL RCSTA
-    BCF     RCSTA, RCSTA_CREN_POSN  
-    MOVF    RCREG, W        
-    MOVF    RCREG, W                
-    BSF     RCSTA, RCSTA_CREN_POSN  
-    
-    BANKSEL _UART_RX_STATUS
-    MOVLW   RX_STATE_ERROR          
-    MOVWF   BANKMASK(_UART_RX_STATUS)     
-    RETURN
+uart_rx_overrun_err:                ; Bancul 0 selectat deja (RCSTA)
+    BCF     RCSTA, RCSTA_CREN_POSN
+    MOVF    RCREG, W
+    MOVF    RCREG, W
+    BSF     RCSTA, RCSTA_CREN_POSN
 
-uart_rx_framing_err:        
     BANKSEL _UART_RX_IDX
     CLRF    BANKMASK(_UART_RX_IDX)
-    BANKSEL RCREG
-    MOVF    RCREG, W                
-    BANKSEL _UART_RX_STATUS
-    MOVLW   RX_STATE_ERROR          
-    MOVWF   BANKMASK(_UART_RX_STATUS)         
+    MOVLW   RX_STATE_ERROR
+    MOVWF   BANKMASK(_UART_RX_STATUS)
+    RETURN
+
+uart_rx_framing_err:                ; Bancul 0 selectat deja (RCSTA)
+    MOVF    RCREG, W
+    BANKSEL _UART_RX_IDX
+    CLRF    BANKMASK(_UART_RX_IDX)
+    MOVLW   RX_STATE_ERROR
+    MOVWF   BANKMASK(_UART_RX_STATUS)
     RETURN
 
 ; Porneste transmisia a UART_TX_LEN octeti din UART_TX_BUF

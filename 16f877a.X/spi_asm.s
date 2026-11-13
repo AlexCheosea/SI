@@ -57,8 +57,7 @@ spi_wait_bf:
     GOTO    spi_delay
     RETURN
 
-spi_delay: ; pauza intre octeti, pentru raspunsul sclavului
-    BANKSEL _spi_delay_counter
+spi_delay: ; pauza intre octeti, pentru raspunsul sclavului (Bancul 3 selectat deja)
     MOVLW   0x2F
     MOVWF   BANKMASK(_spi_delay_counter)
 spi_delay_inner:

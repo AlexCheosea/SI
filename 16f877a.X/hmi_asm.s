@@ -40,11 +40,10 @@ _hmi_init:
     MOVWF   BANKMASK(_disp_cnt)
     RETURN   
 
-display_segment:
+display_segment:               ; apelata doar din _hmi_update, cu Bancul 0 selectat
     MOVLW   HIGH(font_table_low)
     MOVWF   PCLATH
-    BANKSEL PORTC               ; Banc 0
-    BCF     PORTC, BAR_RED 
+    BCF     PORTC, BAR_RED
     BCF     PORTC, BAR_GRN            
     
     BANKSEL _seg_index
@@ -159,23 +158,22 @@ _hmi_update:
     GOTO    display_bar_red&0x7FF
 
     ; Faza 0..7: o cifra
-    MOVF    BANKMASK(_disp_cnt), W
-    BANKSEL PORTE
-    BCF	    PORTB, SEG_EN	; afisaj oprit cat se schimba cifra
-    MOVWF   PORTE                                             
-    
     BSF     STATUS, STATUS_IRP_POSN   ; IRP = 1: INDF adreseaza Bancurile 2 si 3
-    
-    BANKSEL _disp_cnt
+
     MOVF    BANKMASK(_disp_cnt), W
     ADDLW   LOW(_disp_buf)            ; FSR = &disp_buf[faza]
     MOVWF   FSR
 
     MOVF    INDF, W
     MOVWF   BANKMASK(_seg_index)
-    
+
     BCF     STATUS, STATUS_IRP_POSN
-    GOTO    display_segment&0x7FF
+
+    MOVF    BANKMASK(_disp_cnt), W
+    BANKSEL PORTE
+    BCF	    PORTB, SEG_EN	; afisaj oprit cat se schimba cifra
+    MOVWF   PORTE
+    GOTO    display_segment&0x7FF     ; intra in Bancul 0
 
 display_end:  
     BANKSEL _disp_cnt               ; faza urmatoare (circular)

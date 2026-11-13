@@ -13,9 +13,6 @@
 #define BUTTON_SMALL_STEP ((BUTTON_SMALL_STEP_RPM * 10U + 2U) / 3U)
 #define BUTTON_LARGE_STEP ((BUTTON_LARGE_STEP_RPM * 10U + 2U) / 3U)
 
-// O linie de terminal: UART_BUF_SIZE - 1 caractere (inclusiv '\r') + '\n'
-#define LINE_MAX (UART_BUF_SIZE - 1)
-
 #define IS_DIGIT(c) ((c) >= '0' && (c) <= '9')
 
 static uint16_t cruise_speed = 0;        // viteza ceruta de utilizator (pasi/s)
@@ -223,92 +220,6 @@ static void display_direction_sensors(void) {
     hmi_set_bargraph(sensor_to_led_count(sensor_distances[first_sensor + 1U]), GRN);
 }
 
-// ===========================================================================
-// Terminal (UART + coduri ANSI), minim 32 de randuri:
-//   1-14 starea (rescrisa pe loc), 16-23 meniul, 24 "-- HISTORY --",
-//   25-32 istoricul (regiune de derulare)
-// ===========================================================================
-// Urmatorul raport redeseneaza tot ecranul (la pornire si la Enter)
-static __bit term_redraw_pending;
-
-// Adauga str in line de la pos; intoarce noua pozitie
-static uint8_t line_put_str(volatile char *line, uint8_t pos,
-                            const volatile char *str) {
-    while (*str != '\0' && pos < LINE_MAX) {
-        line[pos++] = *str++;
-    }
-    return pos;
-}
-
-// Adauga value aliniat la dreapta pe minim width caractere (latime fixa)
-static uint8_t line_put_uint(volatile char *line, uint8_t pos, uint16_t value,
-                             uint8_t width) {
-    char digits[5];
-    uint8_t first = 0;      // indexul primei cifre semnificative
-    uint8_t count;
-    uint8_t d;
-
-    // Cifrele prin scaderi repetate, fara impartiri
-    d = 0; while (value >= 10000U) { value -= 10000U; d++; } digits[0] = (char)('0' + d);
-    d = 0; while (value >= 1000U)  { value -= 1000U;  d++; } digits[1] = (char)('0' + d);
-    d = 0; while (value >= 100U)   { value -= 100U;   d++; } digits[2] = (char)('0' + d);
-    d = 0; while (value >= 10U)    { value -= 10U;    d++; } digits[3] = (char)('0' + d);
-    digits[4] = (char)('0' + (uint8_t)value);
-
-    while (first < 4U && digits[first] == '0') {
-        first++;                        // fara zerourile din fata (ramane o cifra)
-    }
-    count = (uint8_t)(5U - first);
-
-    while (width > count && pos < LINE_MAX) {
-        line[pos++] = ' ';
-        width--;
-    }
-    while (first < 5U && pos < LINE_MAX) {
-        line[pos++] = digits[first++];
-    }
-    return pos;
-}
-
-// Adauga o distanta (sferturi de cm) ca "cc.ff" cm
-static uint8_t line_put_distance(volatile char *line, uint8_t pos,
-                                 uint8_t distance) {
-    static const char *const quarters[DISTANCE_UNITS_PER_CM] = {
-        ".00", ".25", ".50", ".75"
-    };
-
-    pos = line_put_uint(line, pos, distance / DISTANCE_UNITS_PER_CM, 2);
-    return line_put_str(line, pos, quarters[distance % DISTANCE_UNITS_PER_CM]);
-}
-
-// Adauga '\r' (driverul pune doar '\n') si trimite linia
-static void line_send(volatile char *line, uint8_t pos) {
-    if (pos >= LINE_MAX) {
-        pos = LINE_MAX - 1U;   // pastram loc pentru '\r'
-    }
-    line[pos++] = '\r';
-    line[pos] = '\0';
-    uart_print_string((const char *)line);
-}
-
-// Trimite un text ca o linie
-static void term_print_text(const char *text) {
-    char line[LINE_MAX + 1];
-    line_send(line, line_put_str(line, 0, text));
-}
-
-// Trimite "<label><value><unit>" ca o linie
-static void term_print_value(const char *label, uint16_t value,
-                             uint8_t width, const char *unit) {
-    char line[LINE_MAX + 1];
-    uint8_t pos;
-
-    pos = line_put_str(line, 0, label);
-    pos = line_put_uint(line, pos, value, width);
-    pos = line_put_str(line, pos, unit);
-    line_send(line, pos);
-}
-
 static void update_motor_voltage_status(void) {
     uint16_t millivolts = motor_voltage_millivolts;
 
@@ -330,113 +241,396 @@ static void update_motor_voltage_status(void) {
 
 }
 
-// Raportul de stare (randurile 1-14). CRUISE = viteza ceruta, TARGET = trimisa
-// (dupa incetinire), ACTUAL = raportata de sclav. Cu term_redraw_pending
-// redeseneaza intai tot ecranul. Blocheaza pana pleaca liniile.
-static void uart_print_status(void) {
-    static const char *const sensor_labels[SENSOR_COUNT] = {
-        "S0F ", "S1F ", "S2B ", "S3B "
+// ===========================================================================
+// Terminal (UART + coduri ANSI), minim 28 de randuri, set de caractere CP437.
+// Un chenar dublu, pe sectiuni:
+//    1  STATUS     2-6   starea (rescrisa pe loc; randul 4 = antet fix)
+//    7  SENSORS    8-11  senzorii
+//   12  MENU      13-18  meniul (fix)
+//   19  HISTORY   20-27  istoricul (regiune de derulare)
+//   28  marginea de jos
+// Fiecare linie se formateaza direct in UART_TX_BUF, doar cand nu se transmite
+// nimic, si incepe cu pozitionarea cursorului (ESC[<rand>H): liniile sunt
+// independente, deci raportul si istoricul se pot intercala.
+// O linie: ESC[rrH (5) + margine + BOX_W + margine = 32 = UART_TX_BUF_SIZE.
+// ===========================================================================
+#define BOX_W         25U              // latimea interioara a chenarului
+#define BOX_RIGHT_COL (BOX_W + 2U)     // coloana marginii din dreapta
+
+// Caracterele chenarului (CP437)
+#define BOX_H  '\xCD'                   // linie orizontala dubla
+#define BOX_V  '\xBA'                   // linie verticala dubla
+#define BOX_TL '\xC9'                   // colt stanga sus
+#define BOX_TR '\xBB'                   // colt dreapta sus
+#define BOX_BL '\xC8'                   // colt stanga jos
+#define BOX_BR '\xBC'                   // colt dreapta jos
+#define BOX_ML '\xCC'                   // ramificatie spre dreapta (stanga)
+#define BOX_MR '\xB9'                   // ramificatie spre stanga (dreapta)
+
+#define ROW_TOP        1U
+#define ROW_DIR        2U
+#define ROW_PATH       3U
+#define ROW_RPM_HDR    4U
+#define ROW_RPM        5U
+#define ROW_VMOT       6U
+#define ROW_SENS_HDR   7U
+#define ROW_SENS       8U               // SENSOR_COUNT randuri
+#define ROW_MENU_HDR   12U
+#define ROW_MENU       13U              // MENU_ROWS randuri
+#define ROW_HIST_HDR   19U
+#define ROW_HIST_TOP   20U
+#define ROW_HIST_BOT   27U
+#define ROW_BOTTOM     28U
+
+#define MENU_ROWS 6U
+#define HIST_ROWS (ROW_HIST_BOT - ROW_HIST_TOP + 1U)
+
+// Liniile unui raport, in ordinea trimiterii: cele fixe doar la redesenare,
+// apoi starea (raportul normal incepe la TL_STATUS)
+enum {
+    TL_CLEAR,                           // ESC[r ESC[2J
+    TL_TOP,
+    TL_RPM_HDR,
+    TL_SENS_HDR,
+    TL_MENU_HDR,
+    TL_MENU,                            // MENU_ROWS linii
+    TL_HIST_HDR = TL_MENU + MENU_ROWS,
+    TL_HIST,                            // HIST_ROWS randuri goale
+    TL_BOTTOM = TL_HIST + HIST_ROWS,
+    TL_REGION,                          // ESC[20;27r
+    TL_STATUS,
+    TL_DIR = TL_STATUS,
+    TL_PATH,
+    TL_RPM,
+    TL_VMOT,
+    TL_SENS,                            // SENSOR_COUNT linii
+    TL_END = TL_SENS + SENSOR_COUNT
+};
+#define TL_IDLE 0xFFU                   // niciun raport in curs
+
+// Secventa ESC[20;27r din TL_REGION este scrisa ca text: eroare de compilare
+// daca randurile istoricului se schimba
+typedef char hist_region_matches_rows[
+    (ROW_HIST_TOP == 20U && ROW_HIST_BOT == 27U) ? 1 : -1];
+
+// Stiva hardware are 8 niveluri, iar intreruperea foloseste 3 (intrarea,
+// hmi_update, CALL-ul in tabelul de fonturi din hmi_asm.s). Calea de
+// formatare are deci cel mult 4 niveluri sub main:
+//   uart_print_status -> term_format_* -> tx_row_begin / tx_str / tx_uint /
+//   tx_row_end -> tx_char / tx_csi (frunze). Ajutoarele de un rand sunt macro-uri.
+
+// Urmatorul raport redeseneaza tot ecranul (la pornire si la Enter)
+static __bit term_redraw_pending;
+static uint8_t term_line = TL_IDLE;     // urmatoarea linie a raportului in curs
+static uint8_t tx_len;                  // octeti formatati in UART_TX_BUF
+static uint8_t tx_row;                  // indexul primului caracter din interiorul randului
+
+// Adauga un caracter in UART_TX_BUF (prin index); ce nu mai incape se pierde
+static void tx_char(char c) {
+    if (tx_len < UART_TX_BUF_SIZE) {
+        UART_TX_BUF[tx_len++] = (uint8_t)c;
+    }
+}
+
+static void tx_str(const char *str) {
+    while (*str != '\0') {
+        tx_char(*str++);
+    }
+}
+
+// value aliniat la dreapta pe minim width caractere (latime fixa)
+static void tx_uint(uint16_t value, uint8_t width) {
+    char digits[5];
+    uint8_t first = 0;      // indexul primei cifre semnificative
+    uint8_t count;
+    uint8_t d;
+
+    // Cifrele prin scaderi repetate, fara impartiri
+    d = 0; while (value >= 10000U) { value -= 10000U; d++; } digits[0] = (char)('0' + d);
+    d = 0; while (value >= 1000U)  { value -= 1000U;  d++; } digits[1] = (char)('0' + d);
+    d = 0; while (value >= 100U)   { value -= 100U;   d++; } digits[2] = (char)('0' + d);
+    d = 0; while (value >= 10U)    { value -= 10U;    d++; } digits[3] = (char)('0' + d);
+    digits[4] = (char)('0' + (uint8_t)value);
+
+    while (first < 4U && digits[first] == '0') {
+        first++;                        // fara zerourile din fata (ramane o cifra)
+    }
+    count = (uint8_t)(5U - first);
+
+    while (width > count) {
+        tx_char(' ');
+        width--;
+    }
+    while (first < 5U) {
+        tx_char(digits[first++]);
+    }
+}
+
+// ESC[<n><cmd>, n < 100: H = cursor la inceputul randului n, G = cursor la
+// coloana n. Frunza: scrie direct in buffer; daca nu incape, se pierde.
+static void tx_csi(uint8_t n, char cmd) {
+    uint8_t tens = 0;
+
+    if (tx_len > UART_TX_BUF_SIZE - 5U) {
+        return;
+    }
+    while (n >= 10U) {
+        n -= 10U;
+        tens++;
+    }
+    UART_TX_BUF[tx_len++] = 0x1B;
+    UART_TX_BUF[tx_len++] = '[';
+    if (tens != 0U) {
+        UART_TX_BUF[tx_len++] = (uint8_t)('0' + tens);
+    }
+    UART_TX_BUF[tx_len++] = (uint8_t)('0' + n);
+    UART_TX_BUF[tx_len++] = (uint8_t)cmd;
+}
+
+// Linie noua: cursor la inceputul randului row, apoi marginea stanga
+static void tx_row_begin(uint8_t row, char left) {
+    tx_len = 0;
+    tx_csi(row, 'H');
+    tx_char(left);
+    tx_row = tx_len;
+}
+
+// Rand de text: marginea stanga si un spatiu
+#define tx_text_row(row) do { tx_row_begin((row), BOX_V); tx_char(' '); } while (0)
+
+// Completeaza interiorul randului cu fill pana la BOX_W, apoi marginea dreapta.
+// Campurile au latime fixa, deci randul suprascrie complet varianta anterioara.
+static void tx_row_end(char fill, char right) {
+    while ((uint8_t)(tx_len - tx_row) < BOX_W && tx_len < UART_TX_BUF_SIZE) {
+        tx_char(fill);
+    }
+    tx_char(right);
+}
+
+// Trimite linia formatata (transmisia este oprita, verificat de apelant)
+#define tx_send() do { UART_TX_LEN = tx_len; uart_send(); } while (0)
+
+// Liniile fixe (doar la redesenare)
+static void term_format_static(uint8_t line) {
+    static const char *const menu[MENU_ROWS] = {
+        "0 stop 1 max 2 reverse",       // 2 sub 4/6/8/10; 1 la mijloc intre ele
+        // '|' pe coloana din mijloc a chenarului (a 13-a din BOX_W = 25);
+        // fiecare coloana incepe la un spatiu de peretele ei (ca restul randurilor)
+        "3 + 10RPM  | 4 - 10RPM",
+        "5 +100RPM  | 6 -100RPM",
+        "7 + Volume | 8 - Volume",
+        "9 + Tone   | 10 - Tone",
+        "Enter = redraw"
     };
-    char line[LINE_MAX + 1];
-    uint8_t pos;
-    uint8_t channel;
+    uint8_t row;
+    char left = BOX_ML;
+    char right = BOX_MR;
+    const char *title;
+
+    if (line == TL_CLEAR) {
+        // ESC[r = fara regiune de derulare, ESC[2J = sterge ecranul
+        tx_len = 0;
+        tx_str("\x1b[r\x1b[2J");
+        return;
+    }
+    if (line == TL_REGION) {
+        // Regiune de derulare doar pentru istoric (ROW_HIST_TOP;ROW_HIST_BOT)
+        tx_len = 0;
+        tx_str("\x1b[20;27r");
+        return;
+    }
+    if (line == TL_RPM_HDR) {
+        tx_text_row(ROW_RPM_HDR);
+        tx_str("    CRUISE TARGET ACTUAL");
+        tx_row_end(' ', BOX_V);
+        return;
+    }
+    if (line >= TL_MENU && line < TL_HIST_HDR) {
+        tx_text_row((uint8_t)(ROW_MENU + (line - TL_MENU)));
+        tx_str(menu[line - TL_MENU]);
+        tx_row_end(' ', BOX_V);
+        return;
+    }
+    if (line >= TL_HIST && line < TL_BOTTOM) {
+        // Rand gol de istoric: doar marginile (ecranul este deja sters)
+        tx_row_begin((uint8_t)(ROW_HIST_TOP + (line - TL_HIST)), BOX_V);
+        tx_csi(BOX_RIGHT_COL, 'G');
+        tx_char(BOX_V);
+        return;
+    }
+
+    // Margine orizontala cu titlu optional: <left>== TITLU ====...<right>
+    if (line == TL_TOP) {
+        row = ROW_TOP;
+        left = BOX_TL;
+        right = BOX_TR;
+        title = "STATUS";
+    } else if (line == TL_SENS_HDR) {
+        row = ROW_SENS_HDR;
+        title = "SENSORS";
+    } else if (line == TL_MENU_HDR) {
+        row = ROW_MENU_HDR;
+        title = "MENU";
+    } else if (line == TL_HIST_HDR) {
+        row = ROW_HIST_HDR;
+        title = "HISTORY";
+    } else {                            // TL_BOTTOM
+        row = ROW_BOTTOM;
+        left = BOX_BL;
+        right = BOX_BR;
+        title = "";
+    }
+    tx_row_begin(row, left);
+    tx_char(BOX_H);
+    tx_char(BOX_H);
+    if (*title != '\0') {
+        tx_char(' ');
+        tx_str(title);
+        tx_char(' ');
+    }
+    tx_row_end(BOX_H, right);
+}
+
+// Liniile de stare. CRUISE = viteza ceruta, TARGET = trimisa (dupa
+// incetinire), ACTUAL = raportata de sclav. Toate campurile au latime fixa.
+static void term_format_status(uint8_t line) {
+    static const char *const sensor_labels[SENSOR_COUNT] = {
+        "S0F", "S1F", "S2B", "S3B"
+    };
+    static const char *const quarters[DISTANCE_UNITS_PER_CM] = {
+        ".00", ".25", ".50", ".75"
+    };
     uint8_t closest;            // sferturi de cm
+    uint8_t channel;
     uint16_t millivolts;
 
-    if (term_redraw_pending) {
-        term_redraw_pending = 0;
-        // ESC[r = fara regiune de derulare, ESC[2J = sterge ecranul
-        uart_print_string("\x1b[r\x1b[2J");
-        // ESC[16H = cursor la randul 16 (meniul)
-        uart_print_string("\x1b[16H--MENU--\r");
-        term_print_text("1   reverse");
-        term_print_text("2/3 +/-10RPM");
-        term_print_text("4/5 +/-100RPM");
-        term_print_text("6 max   0 stop");
-        term_print_text("8/9 +/-VOLUME");
-        term_print_text("10/11 +/-TONE");
-        term_print_text("Enter = redraw");
-        term_print_text("-- HISTORY --");          // randul 24
-        // ESC[25;32r = regiune de derulare doar pentru istoric (randurile 25-32)
-        uart_print_string("\x1b[25;32r");
+    switch (line) {
+        case TL_DIR:
+            // "DIR FORWARD   TONE  1/25" (nota numarata de la 1)
+            tx_text_row(ROW_DIR);
+            tx_str(motor_direction == DIR_CCW ? "DIR BACKWARD" : "DIR FORWARD ");
+            tx_str("  TONE ");
+            tx_uint(buzzer_tone + 1U, 2);
+            tx_char('/');
+            tx_uint(NUM_NOTES, 1);
+            break;
+
+        case TL_PATH:
+            // "PATH SLOW  73% VOL  5/10"; % = cat din viteza de croaziera e permis
+            tx_text_row(ROW_PATH);
+            tx_str("PATH ");
+            closest = closest_obstacle();
+            if (path_stop || closest <= DISTANCE_STOP) {
+                tx_str("STOP     ");
+            } else if (path_slow) {
+                if (closest > DISTANCE_FAR) {
+                    closest = DISTANCE_FAR;      // banda de histerezis: 100%
+                }
+                tx_str("SLOW");
+                tx_uint((uint16_t)(((closest - DISTANCE_STOP) * 100U) /
+                                   (DISTANCE_FAR - DISTANCE_STOP)), 4);
+                tx_char('%');
+            } else {
+                tx_str("CLEAR    ");
+            }
+            tx_str(" VOL ");
+            tx_uint(buzzer_volume, 2);
+            tx_str("/10");
+            break;
+
+        case TL_RPM:
+            // Sub antetul "CRUISE TARGET ACTUAL"
+            tx_text_row(ROW_RPM);
+            tx_str("RPM");
+            tx_uint(sps_to_rpm(cruise_speed), 7);
+            tx_uint(sps_to_rpm(effective_speed), 7);
+            tx_uint(sps_to_rpm(actual_speed), 7);
+            break;
+
+        case TL_VMOT:
+            // "VMOT 12.34V VOLTAGE OK"
+            millivolts = motor_voltage_millivolts;
+            tx_text_row(ROW_VMOT);
+            tx_str("VMOT ");
+            tx_uint(millivolts / 1000U, 2);
+            tx_char('.');
+            millivolts = (millivolts % 1000U) / 10U;
+            if (millivolts < 10U) {
+                tx_char('0');
+            }
+            tx_uint(millivolts, 1);
+            tx_str("V ");
+            if (motor_overvoltage) {
+                tx_str("OVERVOLTAGE");
+            } else if (motor_undervoltage) {
+                tx_str("UNDERVOLTAGE");
+            } else {
+                tx_str("VOLTAGE OK");
+            }
+            break;
+
+        default:
+            // "S0F ADC 1023  12.25 cm": valoarea ADC filtrata si distanta
+            channel = (uint8_t)(line - TL_SENS);
+            closest = sensor_distances[channel];
+            tx_text_row((uint8_t)(ROW_SENS + channel));
+            tx_str(sensor_labels[channel]);
+            tx_str(" ADC");
+            tx_uint(sensor_values[channel], 5);
+            tx_uint(closest / DISTANCE_UNITS_PER_CM, 4);
+            tx_str(quarters[closest % DISTANCE_UNITS_PER_CM]);
+            tx_str(" cm");
+            break;
     }
+    tx_row_end(' ', BOX_V);
+}
 
-    // ESC[H = cursor la (1,1); liniile de latime fixa se suprascriu
-    term_print_text("\x1b[H--STATUS--");
-    term_print_text(motor_direction == DIR_CCW ? "DIR BACKWARD"
-                                               : "DIR FORWARD ");
-    term_print_value("CRUISE ", sps_to_rpm(cruise_speed), 4, "RPM");
-    term_print_value("TARGET ", sps_to_rpm(effective_speed), 4, "RPM");
-    term_print_value("ACTUAL ", sps_to_rpm(actual_speed), 4, "RPM");
+// Raportul de stare, o linie pe apel, ca bucla principala sa nu astepte:
+// daca se transmite ceva, se intoarce imediat. Un raport incepe cand expira
+// status_report_timer; cu term_redraw_pending incepe cu tot ecranul.
+static void uart_print_status(void) {
+    uint8_t line;
 
-    // Starea drumului; % = cat din viteza de croaziera e permis.
-    // Toate variantele au aceeasi latime.
-    closest = closest_obstacle();
-    if (path_stop || closest <= DISTANCE_STOP) {
-        term_print_text("PATH STOP     ");
-    } else if (path_slow) {
-        if (closest > DISTANCE_FAR) {
-            closest = DISTANCE_FAR;      // banda de histerezis: 100%
+    if (UART_TX_STATUS == UART_TX_BUSY) {
+        return;
+    }
+    if (term_line == TL_IDLE) {
+        if (status_report_timer != 0U) {
+            return;
         }
-        term_print_value("PATH SLOW ",
-            (uint16_t)(((closest - DISTANCE_STOP) * 100U) /
-                       (DISTANCE_FAR - DISTANCE_STOP)), 3, "%");
+        status_report_timer = STATUS_REPORT_TIMER;
+        line = term_redraw_pending ? (uint8_t)TL_CLEAR : (uint8_t)TL_STATUS;
+        term_redraw_pending = 0;
     } else {
-        term_print_text("PATH CLEAR    ");
+        line = term_line;
     }
+    term_line = (line + 1U == TL_END) ? TL_IDLE : (uint8_t)(line + 1U);
 
-    // "S0F <adc> <cm>.<cc>": valoarea ADC filtrata si distanta in cm
-    for (channel = 0; channel < SENSOR_COUNT; channel++) {
-        pos = line_put_str(line, 0, sensor_labels[channel]);
-        pos = line_put_uint(line, pos, sensor_values[channel], 4);
-        pos = line_put_str(line, pos, " ");
-        pos = line_put_distance(line, pos, sensor_distances[channel]);
-        line_send(line, pos);
-    }
-
-    // VMOT <volti>.<sutimi>V
-    millivolts = motor_voltage_millivolts;
-    pos = line_put_str(line, 0, "VMOT ");
-    pos = line_put_uint(line, pos, millivolts / 1000U, 2);
-    pos = line_put_str(line, pos, ".");
-    millivolts = (millivolts % 1000U) / 10U;
-    if (millivolts < 10U) {
-        pos = line_put_str(line, pos, "0");
-    }
-    pos = line_put_uint(line, pos, millivolts, 1);
-    pos = line_put_str(line, pos, "V");
-    line_send(line, pos);
-    if (motor_overvoltage) {
-        term_print_text("OVERVOLTAGE ");
-    } else if (motor_undervoltage) {
-        term_print_text("UNDERVOLTAGE");
+    if (line < TL_STATUS) {
+        term_format_static(line);
     } else {
-        term_print_text("VOLTAGE OK  ");
+        term_format_status(line);
     }
-
-    // Nota numarata de la 1
-    term_print_value("VOLUME ", buzzer_volume, 2, "/10");
-    pos = line_put_str(line, 0, "TONE ");
-    pos = line_put_uint(line, pos, buzzer_tone + 1U, 2);
-    pos = line_put_str(line, pos, "/");
-    pos = line_put_uint(line, pos, NUM_NOTES, 1);
-    line_send(line, pos);
+    tx_send();
 }
 
 // Comanda UART: numarul din meniu, pe o linie terminata cu '\n' (tio: --map OCRNL).
 // Linie goala = redesenare. Fiecare comanda apare in istoric ca "<comanda> <actiune>".
+// Linia din istoric se formateaza in UART_TX_BUF: cat timp se transmite,
+// comanda asteapta in UART_RX_BUF pana la o trecere urmatoare.
 static void uart_handle_command(void) {
-    static const uint16_t menu_steps[2] = {10, 100};          // comenzile 2-5
+    static const uint16_t menu_steps[2] = {10, 100};          // comenzile 3-6
     uint8_t len;
-    uint8_t pos;
     uint8_t number = 0xFF;      // numarul din meniu; 0xFF = comanda invalida
     uint8_t increase = 0;
     uint16_t delta = 0;         // pasul in RPM; 0 = nu e comanda de viteza
     const char *action = "?";
-    char line[LINE_MAX + 1];    // linia din istoric
 
     if (uart_receive() == 0U) {
         return;                 // nicio linie completa
+    }
+    if (UART_TX_STATUS == UART_TX_BUSY) {
+        return;                 // bufferul de transmisie este ocupat
     }
     len = (uint8_t)(UART_RX_LEN - 1U); // excludem '\n'
     UART_RX_BUF[len] = '\0';
@@ -447,8 +641,10 @@ static void uart_handle_command(void) {
         UART_RX_BUF[--len] = '\0';
     }
     if (len == 0U) {
-        // Linie goala: redesenam ecranul cu urmatorul raport, chiar acum
+        // Linie goala: raportul in curs se abandoneaza si incepe imediat
+        // unul nou, cu redesenarea intregului ecran
         term_redraw_pending = 1;
+        term_line = TL_IDLE;
         status_report_timer = 0;
         uart_release();
         return;
@@ -471,15 +667,20 @@ static void uart_handle_command(void) {
             action = "STOP";
             break;
         case 1:
+            cruise_speed = MAX_CRUISE_SPEED;
+            cruise_speed_changed = 1;
+            action = "MAX";
+            break;
+        case 2:
             set_motor_direction((motor_direction == DIR_CW) ? DIR_CCW : DIR_CW);
             action = (motor_direction == DIR_CW) ? "FWD" : "BACK";
             break;
-        case 2: case 3: case 4: case 5: {
-            // Pas de viteza in RPM (par = +, impar = -), limitat la 0..MAX
+        case 3: case 4: case 5: case 6: {
+            // Pas de viteza in RPM (impar = +, par = -), limitat la 0..MAX
             uint16_t rpm = sps_to_rpm(cruise_speed);
 
-            delta = menu_steps[(number - 2U) / 2U];
-            increase = (uint8_t)((number & 1U) == 0U);
+            delta = menu_steps[(number - 3U) / 2U];
+            increase = (uint8_t)((number & 1U) != 0U);
             if (increase) {
                 rpm = (delta >= MAX_CRUISE_RPM - rpm) ? MAX_CRUISE_RPM
                                                       : rpm + delta;
@@ -490,44 +691,45 @@ static void uart_handle_command(void) {
             cruise_speed_changed = 1;
             break;
         }
-        case 6:
-            cruise_speed = MAX_CRUISE_SPEED;
-            cruise_speed_changed = 1;
-            action = "MAX";
+        case 7: case 8:
+            change_buzzer_volume((uint8_t)(number == 7U));
+            action = (number == 7U) ? "VOL+" : "VOL-";
             break;
-        case 8: case 9:
-            change_buzzer_volume((uint8_t)(number == 8U));
-            action = (number == 8U) ? "VOL+" : "VOL-";
-            break;
-        case 10: case 11:
-            change_buzzer_tone((uint8_t)(number == 10U));
-            action = (number == 10U) ? "TONE+" : "TONE-";
+        case 9: case 10:
+            change_buzzer_tone((uint8_t)(number == 9U));
+            action = (number == 9U) ? "TONE+" : "TONE-";
             break;
         default:
             break;              // necunoscuta: in istoric apare "<text> ?"
     }
 
-    // Linia din istoric, pe ultimul rand al regiunii (ESC[32H); '\n' o deruleaza.
-    // Se construieste intr-un buffer local: un pointer catre UART_RX_BUF (Bank 3,
-    // definit in asamblare) ar scrie in alt banc. UART_RX_BUF doar prin index.
-    pos = line_put_str(line, 0, "\x1b[32H");
+    // Linia din istoric, pe ultimul rand al regiunii: '\n' deruleaza intai
+    // regiunea, apoi randul nou se scrie cu margini (ESC[<col>G = marginea
+    // dreapta, fara spatii de completare). UART_RX_BUF doar prin index.
+    tx_len = 0;
+    tx_csi(ROW_HIST_BOT, 'H');
+    tx_char('\n');
+    tx_char(BOX_V);
+    tx_char(' ');
     if (number == 0xFF) {
-        pos = line_put_str(line, pos, "?");
+        tx_char('?');
     } else {
-        line[pos++] = (char)UART_RX_BUF[0];     // cel mult doua cifre
+        tx_char((char)UART_RX_BUF[0]);          // cel mult doua cifre
         if (len > 1U) {
-            line[pos++] = (char)UART_RX_BUF[1];
+            tx_char((char)UART_RX_BUF[1]);
         }
-        pos = line_put_str(line, pos, " ");
+        tx_char(' ');
         if (delta != 0U) {
-            pos = line_put_str(line, pos, increase ? "+" : "-");
-            pos = line_put_uint(line, pos, delta, 1);
-            pos = line_put_str(line, pos, "RPM");
+            tx_char(increase ? '+' : '-');
+            tx_uint(delta, 1);
+            tx_str("RPM");
         } else {
-            pos = line_put_str(line, pos, action);
+            tx_str(action);
         }
     }
-    line_send(line, pos);
+    tx_csi(BOX_RIGHT_COL, 'G');
+    tx_char(BOX_V);
+    tx_send();
     uart_release();
 }
 
@@ -617,10 +819,7 @@ void main(void) {
             motor_speed_report_timer = MOTOR_SPEED_REPORT_TIMER;
         }
 
-        // Raportul de stare periodic
-        if (status_report_timer == 0) {
-            status_report_timer = STATUS_REPORT_TIMER;
-            uart_print_status();
-        }
+        // Raportul de stare periodic: cel mult o linie pe trecere
+        uart_print_status();
     }
 }
