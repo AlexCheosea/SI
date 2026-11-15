@@ -49,16 +49,14 @@ spi_wait_bf:
     MOVF    SSPBUF, W                    
     
     MOVWF   INDF                        ; octetul primit inlocuieste pe cel trimis
-    
-    INCF    FSR, F                      
-    ; Fara pauza dupa ultimul octet
-    BANKSEL _spi_counter
-    DECFSZ  BANKMASK(_spi_counter), F
-    GOTO    spi_delay
-    RETURN
 
-spi_delay: ; pauza intre octeti, pentru raspunsul sclavului (Bancul 3 selectat deja)
-    ; ~3 Tcy pe iteratie: 0x7F -> ~380 Tcy = ~83 us la 18.432 MHz. Sclavul
+    INCF    FSR, F
+
+    ; Pauza dupa FIECARE octet, inclusiv dupa ultimul: sclavul pune SPI_ACK
+    ; in SSPBUF abia in ISR-ul ultimului octet. Fara pauza, un pachet trimis
+    ; imediat dupa altul (citirea pozitiei, tinta: LO + HI) porneste inainte
+    ; de reincarcare -> primul octet al raspunsului nu e SPI_ACK (spi_err).
+    ; ~3 Tcy pe iteratie: 0x9F -> ~477 Tcy = ~103 us la 18.432 MHz. Sclavul
     ; (8 MHz, 2 MIPS) reincarca SSPBUF in ISR, posibil dupa un pas de motor
     ; (contorul de pozitie pe 32 de biti): ~90 Tcy ai sclavului = ~45 us.
     MOVLW   0x9F
@@ -67,6 +65,10 @@ spi_delay: ; pauza intre octeti, pentru raspunsul sclavului (Bancul 3 selectat d
 spi_delay_inner:
     DECFSZ  BANKMASK(_spi_delay_counter), F
     GOTO    spi_delay_inner&0x7FF
+
+    BANKSEL _spi_counter
+    DECFSZ  BANKMASK(_spi_counter), F
     GOTO    spi_loop&0x7FF
+    RETURN
 
 END

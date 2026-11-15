@@ -75,6 +75,9 @@ static uint8_t spi_position_latch[2];
 void spi_isr(void) {
     uint8_t idx = spi_index;
     uint8_t rx_byte = SSPBUF;   // citirea goleste BF
+    // O reincarcare ratata anterior (master-ul a pornit octetul prea devreme)
+    // lasa WCOL setat; se sterge ca scrierea de mai jos sa fie acceptata
+    SSPCONbits.WCOL = 0;
 
     // SSPBUF se reincarca primul: master-ul asteapta doar pauza dintre octeti.
     // Dupa octetul 0 (comanda) se stie ce raspuns se cere. motor_position se
