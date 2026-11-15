@@ -15,6 +15,8 @@ void main(void) {
     system_init();
 
     while (1) {
+        CLRWDT();   // o trecere dureaza mult sub perioada watchdog-ului (~132 ms)
+
         di();
         spi_resync();
         ei();
@@ -28,7 +30,21 @@ void main(void) {
             ei();
             motor_set_target_speed(speed, dir);
         }
+        if (spi_speed_limit_updated) {
+            di();
+            uint16_t limit = spi_speed_limit;
+            spi_speed_limit_updated = 0;
+            ei();
+            motor_set_speed_limit(limit);
+        }
+        if (spi_target_updated) {
+            di();
+            int32_t target = spi_target;
+            spi_target_updated = 0;
+            ei();
+            motor_set_position_target(target);
+        }
 
-        motor_ramp_task();
+        motor_ramp_task(spi_link_lost);
     }
 }

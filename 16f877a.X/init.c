@@ -82,6 +82,9 @@ void __interrupt() isr(void){
         if(status_report_timer > 0){
             status_report_timer--;
         }
+        if(position_report_timer > 0){
+            position_report_timer--;
+        }
         T0IF = 0;
     }
     // UART: octet primit

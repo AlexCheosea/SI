@@ -27,6 +27,11 @@ void system_init(){
     INTCONbits.PEIE = 1;
     INTCONbits.GIE = 1;
 
+    // Watchdog pornit dupa initializare; resetat doar din bucla principala
+    // (nu din ISR: o bucla blocata ar fi mascata de intreruperi)
+    CLRWDT();
+    WDTCONbits.WDTPS = WDT_PRESCALER_1_4096;
+    WDTCONbits.SWDTEN = 1;
 }
 void __interrupt() isr_handler(){
     if(PIR1bits.SSPIF)

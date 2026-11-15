@@ -10,6 +10,7 @@
 #define MOTOR_VOLTAGE_TIMER 2
 #define MOTOR_SPEED_REPORT_TIMER 150
 #define STATUS_REPORT_TIMER 200        // raportul de stare UART
+#define POSITION_REPORT_TIMER 20       // citirea pozitiei de la sclav (2 pachete SPI)
 #define SENSOR_COUNT 4
 // Timp de achizitie ADC, in us. Minimul din foaia de catalog:
 // TACQ = 2 us + 120 pF x (8 kOhm + Rsursa) x ln(2047) + 0.05 us / C peste 25 C
@@ -50,7 +51,7 @@
 #define MOTOR_VOLTAGE_MIN 5000UL       // mV
 #define MOTOR_VOLTAGE_MAX 15000UL      // mV
 #define MOTOR_VOLTAGE_TOLERANCE 500UL  // mV
-#define USE_DUMMY_SENSOR_VALUES 0
+#define USE_DUMMY_SENSOR_VALUES 1
 #define DUMMY_SENSOR_ADC_VALUE 0U
 #define USE_DUMMY_MOTOR_VOLTAGE 1
 #define DUMMY_MOTOR_VOLTAGE_ADC 300U    // valoarea ADC simulata
@@ -59,6 +60,7 @@ extern volatile uint8_t sample_timer;
 extern volatile uint8_t motor_voltage_timer;
 extern volatile uint8_t motor_speed_report_timer;
 extern volatile uint8_t status_report_timer;
+extern volatile uint8_t position_report_timer;
 extern volatile uint16_t sensor_values[SENSOR_COUNT];
 extern volatile uint8_t sensor_distances[SENSOR_COUNT];
 extern volatile uint16_t motor_voltage_millivolts;

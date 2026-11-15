@@ -4,8 +4,15 @@
 // Constante
 // ===========================================================================
 // Motor cu 200 pasi/rotatie: RPM = pasi/s x 60 / 200 = pasi/s x 3 / 10
-#define MAX_CRUISE_SPEED  5000U                            // pasi/s
-#define MAX_CRUISE_RPM    ((MAX_CRUISE_SPEED * 3U) / 10U)
+// Plafon redus pentru precizie (mai putini pasi pierduti); acelasi in sclav (MAX_SPS)
+#define MAX_CRUISE_RPM    800U
+#define MAX_CRUISE_SPEED  ((MAX_CRUISE_RPM * 10U + 2U) / 3U)  // pasi/s (2667)
+
+// Valorile comenzilor UART se citesc pe 32 de biti, limitate la INT32_MAX
+// (mov: tinta / pas in pasi); celelalte comenzi le limiteaza la CMD_SMALL_MAX
+#define CMD_VALUE_MAX   2147483647UL   // INT32_MAX
+#define CMD_VALUE_TENTH 214748364UL    // partea intreaga din CMD_VALUE_MAX / 10
+#define CMD_SMALL_MAX 9999U
 
 // Pasii butoanelor: in RPM, convertiti in pasi/s
 #define BUTTON_SMALL_STEP_RPM 10U
@@ -37,6 +44,17 @@ static __bit buzzer_settings_changed;    // volum / nota de aplicat in bucla pri
 static uint8_t motor_accel = RAMP_ACCEL_DEFAULT;   // RAMP_MIN .. RAMP_MAX
 static uint8_t motor_decel = RAMP_DECEL_DEFAULT;   // RAMP_MIN .. RAMP_MAX
 static __bit ramp_changed;               // rampa de trimis sclavului
+static __bit spi_err;                    // ultimul raspuns SPI nu a inceput cu SPI_ACK
+// Moduri: continuu (motorul merge in run_direction cu effective_speed) sau
+// pozitie (sclavul merge la target_position cu viteza maxima effective_speed
+// si se opreste). mov -> pozitie; run comuta: din pozitie -> continuu, din
+// continuu -> franare pana la 0 (hold_pending), apoi pozitie cu tinta = locul opririi.
+static __bit position_mode;
+static __bit hold_pending;               // iesire din modul continuu: se asteapta oprirea
+static __bit run_direction;              // sensul modului continuu (rev / butonul de sens)
+static __bit target_pending;             // tinta de trimis sclavului (2 pachete)
+static int32_t target_position = 0;      // pasi
+static int32_t reported_position = 0;    // pozitia citita de la sclav (pasi)
 
 // ===========================================================================
 // Setari in EEPROM (volum, nota, rampa): salvate la schimbare, aplicate la
@@ -97,12 +115,53 @@ static uint16_t rpm_to_sps(uint16_t rpm) {
 // ===========================================================================
 // Comunicatia cu sclavul (SPI)
 // ===========================================================================
-// Trimite o comanda; intoarce raspunsul sclavului (viteza curenta)
+// Trimite o comanda; intoarce raspunsul sclavului (viteza curenta).
+// spi_err: primul octet primit nu este SPI_ACK (sclav absent / desincronizat)
 static int16_t send_motor_command(SPI_Commands_t command, int16_t value) {
     SPI_PACKET->cmd = (unsigned char)command;
     SPI_PACKET->val = value;
     spi_transfer_packet();
+    spi_err = (SPI_PACKET->raw[0] != SPI_ACK);
     return SPI_PACKET->val;
+}
+
+// Viteza cu semn pentru CMD_SET_MOTOR_SPEED: sensul este in semn, deci se
+// retrimite odata cu viteza (un sclav resetat primeste si sensul corect)
+static int16_t motor_velocity(uint16_t speed) {
+    return (motor_direction == DIR_CW) ? (int16_t)speed : -(int16_t)speed;
+}
+
+// Pozitia pe 32 de biti, in doua pachete; sclavul retine partea de sus la
+// primul, deci jumatatile sunt din acelasi moment. Pastrata doar daca ambele
+// raspunsuri incep cu SPI_ACK.
+static void read_motor_position(void) {
+    uint16_t low, high;
+    uint8_t ok;
+
+    low = (uint16_t)send_motor_command(CMD_GET_POSITION_LO, 0);
+    ok = (uint8_t)!spi_err;
+    high = (uint16_t)send_motor_command(CMD_GET_POSITION_HI, 0);
+    if (ok && !spi_err) {
+        reported_position = (int32_t)(((uint32_t)high << 16) | low);
+    } else {
+        spi_err = 1;    // valoarea veche ramane
+    }
+}
+
+// Tinta in doua pachete (LO, apoi HI care o aplica); retrimisa la urmatoarea
+// trecere daca un raspuns nu a inceput cu SPI_ACK
+static void send_target_position(void) {
+    uint8_t ok;
+
+    send_motor_command(CMD_SET_TARGET_LO, (int16_t)(uint16_t)target_position);
+    ok = (uint8_t)!spi_err;
+    send_motor_command(CMD_SET_TARGET_HI,
+                       (int16_t)(uint16_t)((uint32_t)target_position >> 16));
+    if (ok && !spi_err) {
+        target_pending = 0;
+    } else {
+        spi_err = 1;
+    }
 }
 
 // Accelerarea in octetul low, franarea in cel high
@@ -128,9 +187,22 @@ static void display_direction(void) {
     hmi_print_string(motor_direction == DIR_CCW ? "BACKWARD" : " FORWARD");
 }
 
-static void set_motor_direction(uint8_t direction) {
-    motor_direction = (direction != 0U);
-    send_motor_command(CMD_SET_MOTOR_DIR, (int16_t)direction);
+// rev / butonul de sens: doar sensul modului continuu. In modul continuu
+// pleaca spre sclav cu urmatoarea viteza (se schimba semnul); in modul
+// pozitie sensul vine din tinta, iar cel nou se aplica la revenirea in continuu.
+static void reverse_direction(void) {
+    run_direction = (run_direction == DIR_CW) ? DIR_CCW : DIR_CW;
+}
+
+// run: comuta modul continuu. Din pozitie (sau din oprirea in curs) ->
+// continuu; din continuu -> oprire, apoi pozitie (vezi bucla principala).
+static void toggle_continuous_mode(void) {
+    if (position_mode || hold_pending) {
+        position_mode = 0;
+        hold_pending = 0;
+    } else {
+        hold_pending = 1;
+    }
 }
 
 // ===========================================================================
@@ -222,7 +294,8 @@ static void update_parking_buzzer(void) {
 static uint16_t calculate_effective_speed(void) {
     uint8_t distance;
 
-    if (motor_undervoltage || motor_overvoltage || path_stop) {
+    // hold_pending: iesire din modul continuu, motorul franeaza pana la 0
+    if (motor_undervoltage || motor_overvoltage || path_stop || hold_pending) {
         return 0;
     }
     if (!path_slow) {
@@ -305,10 +378,10 @@ static void update_motor_voltage_status(void) {
 // ===========================================================================
 // Terminal (UART + coduri ANSI), minim 31 de randuri, set de caractere CP437.
 // Un chenar dublu, pe sectiuni:
-//    1  STATUS     2-7   starea (rescrisa pe loc; randul 4 = antet fix)
-//    8  SENSORS    9-12  senzorii
-//   13  MENU      14-21  meniul (fix)
-//   22  HISTORY   23-29  istoricul (regiune de derulare)
+//    1  STATUS     2-8   starea (rescrisa pe loc; randul 4 = antet fix)
+//    9  SENSORS   10-13  senzorii
+//   14  MENU      15-22  meniul (fix)
+//   23  HISTORY   24-29  istoricul (regiune de derulare)
 //                 30     linia de comanda: "> <ce se tasteaza>_"
 //   31  marginea de jos
 // Fiecare linie se formateaza direct in UART_TX_BUF, doar cand nu se transmite
@@ -336,12 +409,13 @@ static void update_motor_voltage_status(void) {
 #define ROW_RPM        5U
 #define ROW_VMOT       6U
 #define ROW_RAMP       7U
-#define ROW_SENS_HDR   8U
-#define ROW_SENS       9U               // SENSOR_COUNT randuri
-#define ROW_MENU_HDR   13U
-#define ROW_MENU       14U              // MENU_ROWS randuri
-#define ROW_HIST_HDR   22U
-#define ROW_HIST_TOP   23U
+#define ROW_POS        8U
+#define ROW_SENS_HDR   9U
+#define ROW_SENS       10U              // SENSOR_COUNT randuri
+#define ROW_MENU_HDR   14U
+#define ROW_MENU       15U              // MENU_ROWS randuri
+#define ROW_HIST_HDR   23U
+#define ROW_HIST_TOP   24U
 #define ROW_HIST_BOT   29U
 #define ROW_INPUT      30U              // in afara regiunii de derulare
 #define ROW_BOTTOM     31U
@@ -361,23 +435,24 @@ enum {
     TL_HIST_HDR = TL_MENU + MENU_ROWS,
     TL_HIST,                            // HIST_ROWS randuri goale
     TL_BOTTOM = TL_HIST + HIST_ROWS,
-    TL_REGION,                          // ESC[23;29r
+    TL_REGION,                          // ESC[24;29r
     TL_STATUS,
     TL_DIR = TL_STATUS,
     TL_PATH,
     TL_RPM,
     TL_VMOT,
     TL_RAMP,
+    TL_POS,
     TL_SENS,                            // SENSOR_COUNT linii
     TL_INPUT = TL_SENS + SENSOR_COUNT,  // linia de comanda
     TL_END
 };
 #define TL_IDLE 0xFFU                   // niciun raport in curs
 
-// Secventa ESC[23;29r din TL_REGION este scrisa ca text: eroare de compilare
+// Secventa ESC[24;29r din TL_REGION este scrisa ca text: eroare de compilare
 // daca randurile istoricului se schimba
 typedef char hist_region_matches_rows[
-    (ROW_HIST_TOP == 23U && ROW_HIST_BOT == 29U) ? 1 : -1];
+    (ROW_HIST_TOP == 24U && ROW_HIST_BOT == 29U) ? 1 : -1];
 
 // Stiva hardware are 8 niveluri, iar intreruperea foloseste 3 (intrarea,
 // hmi_update, CALL-ul in tabelul de fonturi din hmi_asm.s). Calea de
@@ -432,6 +507,49 @@ static void tx_uint(uint16_t value, uint8_t width) {
     }
 }
 
+// value cu semn, aliniat la dreapta pe minim width caractere (semnul inclus).
+// Tot prin scaderi repetate (pe 32 de biti), fara impartiri.
+static void tx_int32(int32_t value, uint8_t width) {
+    static const uint32_t powers[9] = {
+        1000000000UL, 100000000UL, 10000000UL, 1000000UL, 100000UL,
+        10000UL, 1000UL, 100UL, 10UL
+    };
+    char digits[10];
+    uint32_t magnitude;
+    uint8_t negative = (uint8_t)(value < 0);
+    uint8_t first = 0;
+    uint8_t count;
+    uint8_t i;
+    uint8_t d;
+
+    // Modulul fara semn: corect si pentru INT32_MIN
+    magnitude = negative ? (uint32_t)0 - (uint32_t)value : (uint32_t)value;
+    for (i = 0; i < 9U; i++) {
+        d = 0;
+        while (magnitude >= powers[i]) {
+            magnitude -= powers[i];
+            d++;
+        }
+        digits[i] = (char)('0' + d);
+    }
+    digits[9] = (char)('0' + (uint8_t)magnitude);
+
+    while (first < 9U && digits[first] == '0') {
+        first++;
+    }
+    count = (uint8_t)(10U - first + negative);
+    while (width > count) {
+        tx_char(' ');
+        width--;
+    }
+    if (negative) {
+        tx_char('-');
+    }
+    while (first < 10U) {
+        tx_char(digits[first++]);
+    }
+}
+
 // ESC[<n><cmd>, n < 100: H = cursor la inceputul randului n, G = cursor la
 // coloana n. Frunza: scrie direct in buffer; daca nu incape, se pierde.
 static void tx_csi(uint8_t n, char cmd) {
@@ -480,13 +598,13 @@ static void tx_row_end(char fill, char right) {
 static void term_format_static(uint8_t line) {
     // Limite verificate de menu_ranges_match
     static const char *const menu[MENU_ROWS] = {
-        "rpm speed      0..1500",
-        "inc accel      5..250",
-        "dec decel      5..250",
-        "vol volume     0..10",
-        "ton tone       1..25",
-        "rev reverse",
-        "N set   +N / -N add/sub",
+        "rpm speed      0..800",
+        "inc/dec ramp   5..250",
+        "vol 0..10    ton 1..25",
+        "mov position (steps)",
+        "rev reverse direction",
+        "run continuous on/off",
+        "<cmd>[+|-]N set/add/sub",
         "empty line = redraw"
     };
     uint8_t row;
@@ -504,7 +622,7 @@ static void term_format_static(uint8_t line) {
     if (line == TL_REGION) {
         // Regiune de derulare doar pentru istoric (ROW_HIST_TOP;ROW_HIST_BOT)
         tx_len = 0;
-        tx_str("\x1b[23;29r");
+        tx_str("\x1b[24;29r");
         return;
     }
     if (line == TL_RPM_HDR) {
@@ -628,7 +746,9 @@ static void term_format_status(uint8_t line) {
             }
             tx_uint(millivolts, 1);
             tx_str("V ");
-            if (motor_overvoltage) {
+            if (spi_err) {
+                tx_str("MOTOR ERROR");
+            } else if (motor_overvoltage) {
                 tx_str("OVERVOLTAGE");
             } else if (motor_undervoltage) {
                 tx_str("UNDERVOLTAGE");
@@ -644,6 +764,25 @@ static void term_format_status(uint8_t line) {
             tx_uint(motor_accel, 4);
             tx_str("  DECEL");
             tx_uint(motor_decel, 4);
+            break;
+
+        case TL_POS:
+            // "POS        -1234 MOVE": pozitia raportata de sclav (pasi) si modul
+            // (RUN = continuu, STOP = iesire din continuu, se asteapta oprirea,
+            // MOVE / DONE = pozitie, in drum / la tinta)
+            tx_text_row(ROW_POS);
+            tx_str("POS");
+            tx_int32(reported_position, 12);
+            tx_char(' ');
+            if (hold_pending) {
+                tx_str("STOP");
+            } else if (!position_mode) {
+                tx_str("RUN ");
+            } else if (reported_position == target_position) {
+                tx_str("DONE");
+            } else {
+                tx_str("MOVE");
+            }
             break;
 
         default:
@@ -736,7 +875,11 @@ static void uart_print_status(void) {
 
 // Comenzi: <mnemonica>[ ][+|-]<numar> (rev fara numar). Fara semn = setare,
 // cu semn = adunare / scadere; rezultatul e limitat.
-enum { UC_RPM, UC_INC, UC_DEC, UC_VOL, UC_TON, UC_REV, UC_COUNT };
+// mov: fara semn = tinta absoluta (0..INT32_MAX), +N / -N = deplasare fata
+// de tinta curenta (in modul pozitie) sau fata de pozitia citita (din modul
+// continuu, din care iese); rezultatul limitat la int32.
+// rev / run: fara numar (sensul modului continuu / comutarea modului continuu).
+enum { UC_RPM, UC_INC, UC_DEC, UC_VOL, UC_TON, UC_MOV, UC_REV, UC_RUN, UC_COUNT };
 #define UC_SET 0U
 #define UC_ADD 1U
 #define UC_SUB 2U
@@ -744,7 +887,7 @@ enum { UC_RPM, UC_INC, UC_DEC, UC_VOL, UC_TON, UC_REV, UC_COUNT };
 
 // Limitele din meniu
 typedef char menu_ranges_match[
-    (MAX_CRUISE_RPM == 1500U && RAMP_MIN == 5U && RAMP_MAX == 250U &&
+    (MAX_CRUISE_RPM == 800U && RAMP_MIN == 5U && RAMP_MAX == 250U &&
      NUM_NOTES == 25U) ? 1 : -1];
 
 // Linia terminata cu '\n' (tio: --map OCRNL); linie goala = redesenare.
@@ -754,12 +897,14 @@ typedef char menu_ranges_match[
 static void uart_handle_command(void) {
     static const char mnemonics[UC_COUNT][3] = {
         {'r', 'p', 'm'}, {'i', 'n', 'c'}, {'d', 'e', 'c'},
-        {'v', 'o', 'l'}, {'t', 'o', 'n'}, {'r', 'e', 'v'}
+        {'v', 'o', 'l'}, {'t', 'o', 'n'}, {'m', 'o', 'v'}, {'r', 'e', 'v'},
+        {'r', 'u', 'n'}
     };
-    static const uint16_t limit_min[UC_REV] = {
+    // Doar comenzile cu limite (UC_MOV are tratarea ei)
+    static const uint16_t limit_min[UC_MOV] = {
         0, RAMP_MIN, RAMP_MIN, 0, 1
     };
-    static const uint16_t limit_max[UC_REV] = {
+    static const uint16_t limit_max[UC_MOV] = {
         MAX_CRUISE_RPM, RAMP_MAX, RAMP_MAX, 10, NUM_NOTES
     };
     uint8_t len;
@@ -767,7 +912,9 @@ static void uart_handle_command(void) {
     uint8_t pos;
     uint8_t mode = UC_SET;
     uint8_t valid = 0;
-    uint16_t value = 0;
+    uint8_t digit;
+    uint32_t value = 0;         // limitat la CMD_VALUE_MAX
+    uint16_t small;             // value limitat la CMD_SMALL_MAX (comenzile cu limite)
     uint16_t current = 0;
 
     if (uart_receive() == 0U) {
@@ -804,7 +951,7 @@ static void uart_handle_command(void) {
         }
     }
 
-    if (cmd == UC_REV) {
+    if (cmd == UC_REV || cmd == UC_RUN) {
         valid = (uint8_t)(len == 3U);
     } else if (cmd < UC_COUNT) {
         pos = 3;
@@ -818,12 +965,21 @@ static void uart_handle_command(void) {
             mode = UC_SUB;
             pos++;
         }
-        // Cel putin o cifra; peste 9999 ramane 9999 (oricum limitat)
+        // Cel putin o cifra; peste CMD_VALUE_MAX ramane CMD_VALUE_MAX.
+        // Sub CMD_VALUE_TENTH rezultatul incape pe 32 de biti (max 2147483649).
+        // Inmultirea (__lmul, legata oricum de buzzer.c) e mai scurta decat
+        // deplasarile pe 32 de biti, pe care compilatorul le scrie inline.
         valid = (uint8_t)(pos < len);
         while (pos < len && IS_DIGIT(UART_RX_BUF[pos])) {
-            value = (value < 1000U)
-                ? (uint16_t)(value * 10U + (uint8_t)(UART_RX_BUF[pos] - '0'))
-                : 9999U;
+            digit = (uint8_t)(UART_RX_BUF[pos] - '0');
+            if (value <= CMD_VALUE_TENTH) {
+                value = value * 10U + digit;
+                if (value > CMD_VALUE_MAX) {
+                    value = CMD_VALUE_MAX;
+                }
+            } else {
+                value = CMD_VALUE_MAX;
+            }
             pos++;
         }
         if (pos != len) {
@@ -833,10 +989,34 @@ static void uart_handle_command(void) {
 
     if (valid) {
         if (cmd == UC_REV) {
-            set_motor_direction((motor_direction == DIR_CW) ? DIR_CCW : DIR_CW);
+            reverse_direction();
+        } else if (cmd == UC_RUN) {
+            toggle_continuous_mode();
+        } else if (cmd == UC_MOV) {
+            // Baza deplasarii: tinta curenta (exacta) daca motorul este deja
+            // in modul pozitie, altfel ultima pozitie citita (veche de maxim
+            // POSITION_REPORT_TIMER ms). value <= INT32_MAX, deci
+            // INT32_MAX - value si INT32_MIN + value incap pe 32 de biti.
+            int32_t base = position_mode ? target_position : reported_position;
+
+            if (mode == UC_ADD) {
+                target_position = (base > INT32_MAX - (int32_t)value)
+                    ? INT32_MAX : base + (int32_t)value;
+            } else if (mode == UC_SUB) {
+                target_position = (base < INT32_MIN + (int32_t)value)
+                    ? INT32_MIN : base - (int32_t)value;
+            } else {
+                target_position = (int32_t)value;
+            }
+            // Din modul continuu (sau din oprirea in curs): direct in pozitie
+            position_mode = 1;
+            hold_pending = 0;
+            target_pending = 1;
         } else {
             uint16_t lo = limit_min[cmd];
             uint16_t hi = limit_max[cmd];
+
+            small = (value > CMD_SMALL_MAX) ? CMD_SMALL_MAX : (uint16_t)value;
 
             switch (cmd) {
                 case UC_RPM: current = sps_to_rpm(cruise_speed); break;
@@ -847,11 +1027,11 @@ static void uart_handle_command(void) {
             }
             // current e in [lo, hi]: fara depasiri
             if (mode == UC_ADD) {
-                current = (value >= hi - current) ? hi : current + value;
+                current = (small >= hi - current) ? hi : current + small;
             } else if (mode == UC_SUB) {
-                current = (value >= current - lo) ? lo : current - value;
+                current = (small >= current - lo) ? lo : current - small;
             } else {
-                current = (value < lo) ? lo : ((value > hi) ? hi : value);
+                current = (small < lo) ? lo : ((small > hi) ? hi : small);
             }
             switch (cmd) {
                 case UC_RPM:
@@ -899,7 +1079,13 @@ static void uart_handle_command(void) {
         }
         tx_str("= ");
         if (cmd == UC_REV) {
-            tx_str((motor_direction == DIR_CW) ? "FWD" : "BACK");
+            tx_str((run_direction == DIR_CW) ? "FWD" : "BACK");
+        } else if (cmd == UC_RUN) {
+            tx_str(hold_pending ? "HOLD" : "RUN");
+        } else if (cmd == UC_MOV) {
+            // Tinta noua. Peste 6 caractere marginea dreapta nu mai incape
+            // in UART_TX_BUF (se pierde), dar numarul ramane intreg.
+            tx_int32(target_position, 1);
         } else {
             tx_uint(current, 1);
         }
@@ -913,10 +1099,20 @@ static void uart_handle_command(void) {
 // ===========================================================================
 // Program principal
 // ===========================================================================
-void main(void) {
-    uint16_t sent_speed = 0xFFFF;     // ultima viteza trimisa (0xFFFF = niciuna)
+// Valori "nimic trimis": la schimbarea modului, comanda modului nou pleaca imediat
+#define SENT_VELOCITY_NONE ((int16_t)-32768)    // |viteza| <= MAX_CRUISE_SPEED
+#define SENT_LIMIT_NONE    0xFFFFU
 
+void main(void) {
+    int16_t sent_velocity;            // ultima viteza cu semn trimisa (mod viteza)
+    uint16_t sent_limit = SENT_LIMIT_NONE; // ultima limita trimisa (mod pozitie)
+    int16_t velocity;
+
+    run_direction = DIR_CW;
     motor_direction = DIR_CW;
+    position_mode = 0;                 // pornire in modul continuu (viteza 0)
+    hold_pending = 0;
+    target_pending = 0;
     term_redraw_pending = 1;
     motor_undervoltage = 0;
     motor_overvoltage = 0;
@@ -928,15 +1124,46 @@ void main(void) {
     system_init();
     buzzer_off();                      // buzzer_init lasa PWM-ul pornit
     buzzer_setup((NoteMuzicale_t)buzzer_tone, buzzer_volume);
+    sent_velocity = motor_velocity(cruise_speed);
     actual_speed = (uint16_t)send_motor_command(
-        CMD_SET_MOTOR_SPEED, (int16_t)cruise_speed);
-    send_motor_command(CMD_SET_MOTOR_DIR, (int16_t)motor_direction);
+        CMD_SET_MOTOR_SPEED, sent_velocity);
     send_motor_ramp();
     ramp_changed = 0;
     display_speed(actual_speed);
     display_direction_sensors();
 
     while (1) {
+        // Pozitia de la sclav (2 pachete), periodic
+        if (position_report_timer == 0U) {
+            read_motor_position();
+            position_report_timer = POSITION_REPORT_TIMER;
+        }
+        // Sensul de deplasare (obstacolele se cauta in el): in modul continuu
+        // run_direction; in modul pozitie spre tinta (la tinta ramane ultimul)
+        if (position_mode) {
+            if (target_position > reported_position) {
+                motor_direction = DIR_CW;
+            } else if (target_position < reported_position) {
+                motor_direction = DIR_CCW;
+            }
+        } else {
+            motor_direction = run_direction;
+        }
+
+        // Iesirea din modul continuu: dupa ce sclavul raporteaza viteza 0,
+        // pozitia proaspata devine tinta (motorul tine locul opririi). Viteza
+        // vine la fiecare comanda de viteza (cel putin la MOTOR_SPEED_REPORT_TIMER).
+        if (hold_pending && actual_speed == 0U && !spi_err) {
+            read_motor_position();
+            if (!spi_err) {
+                target_position = reported_position;
+                position_mode = 1;
+                hold_pending = 0;
+                target_pending = 1;
+                position_report_timer = POSITION_REPORT_TIMER;
+            }
+        }
+
         if(analog_update()){
             update_motor_voltage_status();
             update_obstacle_status();
@@ -973,7 +1200,7 @@ void main(void) {
                 cruise_speed_changed = 1;
                 break;
             case '4':
-                set_motor_direction((motor_direction == DIR_CW) ? DIR_CCW : DIR_CW);
+                reverse_direction();
                 break;
             case '5':
                 change_buzzer_volume(0);
@@ -997,14 +1224,33 @@ void main(void) {
             send_motor_ramp();
         }
 
-        // Viteza se trimite la schimbare si periodic; raspunsul = viteza curenta
+        // Raspunsul oricarei comenzi de viteza = viteza curenta
         effective_speed = calculate_effective_speed();
-        if (effective_speed != sent_speed || motor_speed_report_timer == 0) {
-            actual_speed = (uint16_t)send_motor_command(
-                CMD_SET_MOTOR_SPEED, (int16_t)effective_speed);
-            display_speed(actual_speed);
-            sent_speed = effective_speed;
-            motor_speed_report_timer = MOTOR_SPEED_REPORT_TIMER;
+        if (position_mode) {
+            // Tinta (la schimbare, pana e confirmata), apoi viteza maxima
+            // spre ea (la schimbare si periodic)
+            if (target_pending) {
+                send_target_position();
+            }
+            if (effective_speed != sent_limit || motor_speed_report_timer == 0) {
+                actual_speed = (uint16_t)send_motor_command(
+                    CMD_SET_SPEED_LIMIT, (int16_t)effective_speed);
+                display_speed(actual_speed);
+                sent_limit = effective_speed;
+                sent_velocity = SENT_VELOCITY_NONE;
+                motor_speed_report_timer = MOTOR_SPEED_REPORT_TIMER;
+            }
+        } else {
+            // Viteza cu semn (viteza + sens), la schimbare si periodic
+            velocity = motor_velocity(effective_speed);
+            if (velocity != sent_velocity || motor_speed_report_timer == 0) {
+                actual_speed = (uint16_t)send_motor_command(
+                    CMD_SET_MOTOR_SPEED, velocity);
+                display_speed(actual_speed);
+                sent_velocity = velocity;
+                sent_limit = SENT_LIMIT_NONE;
+                motor_speed_report_timer = MOTOR_SPEED_REPORT_TIMER;
+            }
         }
 
         // Raportul de stare periodic: cel mult o linie pe trecere

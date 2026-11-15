@@ -47,6 +47,7 @@ volatile uint8_t sample_timer = 0;
 volatile uint8_t motor_voltage_timer = 0;
 volatile uint8_t motor_speed_report_timer = 0;
 volatile uint8_t status_report_timer = 0;
+volatile uint8_t position_report_timer = 0;
 volatile uint16_t sensor_values[SENSOR_COUNT];
 volatile uint8_t sensor_distances[SENSOR_COUNT];
 volatile uint16_t motor_voltage_millivolts;

@@ -58,7 +58,11 @@ spi_wait_bf:
     RETURN
 
 spi_delay: ; pauza intre octeti, pentru raspunsul sclavului (Bancul 3 selectat deja)
-    MOVLW   0x2F
+    ; ~3 Tcy pe iteratie: 0x7F -> ~380 Tcy = ~83 us la 18.432 MHz. Sclavul
+    ; (8 MHz, 2 MIPS) reincarca SSPBUF in ISR, posibil dupa un pas de motor
+    ; (contorul de pozitie pe 32 de biti): ~90 Tcy ai sclavului = ~45 us.
+    MOVLW   0x9F
+    BANKSEL _spi_delay_counter
     MOVWF   BANKMASK(_spi_delay_counter)
 spi_delay_inner:
     DECFSZ  BANKMASK(_spi_delay_counter), F

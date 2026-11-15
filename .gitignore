@@ -47,3 +47,6 @@
 /16f877a.X/nbproject/Makefile-genesis.properties
 simbench.py
 16f877a.X/callgraph=full
+
+#simulator
+/sim_tmp/*
